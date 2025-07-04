@@ -1,0 +1,19 @@
+{% extends "main/base.html" %}
+{% block title %}Список игр{% endblock %}
+{% block content %}
+<div class="container">
+  <h2 class="mb-4">Активные игры</h2>
+  {% if games %}
+    <ul class="list-group">
+      {% for game in games %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <strong>{{ game.name }}</strong>
+          <a class="btn btn-success" href="{% url 'join_game' game.id %}">Присоединиться</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>Пока нет доступных игр для присоединения.</p>
+  {% endif %}
+</div>
+{% endblock %}

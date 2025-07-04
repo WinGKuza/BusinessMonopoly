@@ -1,0 +1,77 @@
+{% extends 'main/base.html' %}
+
+{% block title %}Игра: {{ game.name|default:"Без названия" }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1 class="mb-3">Игра: {{ game.name|default:"Без названия" }}</h1>
+    
+    <p><strong>ID игры:</strong> {{ game.id }}</p>
+    <p><strong>Создана:</strong> {{ game.created_at|date:"d.m.Y H:i" }}</p>
+
+    <hr>
+
+    <h4>Игроки (пока не реализовано)</h4>
+    <p>Список игроков, действия и игровой процесс будут здесь.</p>
+
+    {% if request.user == game.creator %}
+      <!-- Кнопка "Удалить игру" для создателя -->
+      <button id="deleteGameBtn" class="btn btn-danger mt-3">Удалить игру</button>
+    {% endif %}
+</div>
+
+<!-- Модальное окно Bootstrap -->
+<div class="modal fade" id="exitModal" tabindex="-1" aria-labelledby="exitModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="exitModalLabel">Подтвердите удаление игры</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        Вы уверены, что хотите удалить игру? Это действие нельзя отменить.
+      </div>
+      <div class="modal-footer">
+        <button id="confirmDeleteBtn" type="button" class="btn btn-danger">Удалить</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  {% if request.user == game.creator %}
+  const deleteBtn = document.getElementById('deleteGameBtn');
+  const exitModalEl = document.getElementById('exitModal');
+  const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+  const exitModal = new bootstrap.Modal(exitModalEl);
+
+  deleteBtn.addEventListener('click', () => {
+    exitModal.show();
+  });
+
+  confirmDeleteBtn.addEventListener('click', () => {
+    fetch("{% url 'delete_game' game.id %}", {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': '{{ csrf_token }}',
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin',
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.status === 'deleted') {
+        window.location.href = '{% url "home" %}';
+      } else {
+        alert('Ошибка при удалении игры.');
+      }
+    })
+    .catch(err => {
+      console.error(err);
+      alert('Ошибка при удалении игры.');
+    });
+  });
+  {% endif %}
+</script>
+{% endblock %}

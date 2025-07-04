@@ -48,7 +48,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'main',
-    'accounts'
+    'accounts',
+    'games'
 ]
 
 LOGIN_REDIRECT_URL = '/'

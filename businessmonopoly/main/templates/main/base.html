@@ -23,6 +23,8 @@
     <a class="me-3 py-2 link-body-emphasis text-decoration-none" href="{% url 'about' %}">О нас</a>
 
     {% if user.is_authenticated %}
+     <a class="me-3 py-2 link-body-emphasis text-decoration-none" href="{% url 'create_game' %}">Создать игру</a>
+     <a class="me-3 py-2 link-body-emphasis text-decoration-none" href="{% url 'game_list' %}">Присоединиться к игре</a>
       <span class="me-3">Привет, {{ user.first_name }}!</span>
       <form method="post" action="{% url 'logout' %}" style="display: inline;">
         {% csrf_token %}
@@ -35,7 +37,18 @@
   </nav>
 </div>
 
-{% block content %}{% endblock %}
+{% if messages %}
+  <div class="container mt-3">
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Закрыть"></button>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
 
+{% block content %}{% endblock %}
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
