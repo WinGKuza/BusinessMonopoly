@@ -6,29 +6,32 @@
 
     <!-- Шестерёнка + Выход -->
     <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 12px; align-items: center;">
+        {% if user == game.creator %}
         <!-- Шестерёнка -->
         <div style="position: relative; display: inline-block;">
             <button onclick="toggleSettingsMenu()" style="background: none; border: none; cursor: pointer; font-size: 22px;">⚙️</button>
             <div id="settings-menu" style="display: none; position: absolute; right: 0; background: white; border: 1px solid #ccc; border-radius: 6px; padding: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 100;">
-                {% if user == game.creator %}
                 <form method="post" action="{% url 'toggle_host' game.id %}" style="margin-bottom: 10px;">
                     {% csrf_token %}
-                    <button type="submit" style="background-color: #6c757d; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">{% if request.user.playerprofile.role == 0 %}Режим игрока{% else %}Режим наблюдателя{% endif %}</button>
+                    <button type="submit" style="background-color: #6c757d; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
+                        {% if request.user.playerprofile.role == 0 %}Режим игрока{% else %}Режим наблюдателя{% endif %}
+                    </button>
                 </form>
                 <form method="post" action="{% url 'delete_game' game.id %}" onsubmit="return confirm('Вы уверены, что хотите удалить игру?')">
                     {% csrf_token %}
-                    <button type="submit" style="background-color: #ff4d4f; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">Удалить игру</button>
+                    <button type="submit" style="background-color: #ff4d4f; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
+                        Удалить игру
+                    </button>
                 </form>
-                {% endif %}
             </div>
         </div>
+        {% endif %}
 
         <!-- Кнопка выхода -->
         <form method="post" action="{% url 'leave_game' game.id %}" style="margin: 0;">
             {% csrf_token %}
             <button type="submit" title="Выйти" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #dc3545; padding: 0;">🚪</button>
         </form>
-
     </div>
 
     <script>
@@ -67,7 +70,20 @@
         <p><strong>Ваши ресурсы:</strong></p>
         <p>Деньги: {{ request.user.playerprofile.money }}</p>
         <p>Влияние: {{ request.user.playerprofile.influence }}</p>
-        <button style="margin-top: 15px; padding: 10px 60px; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">Перевести</button>
+        <button onclick="document.getElementById('transfer-form').style.display='block'" style="margin-top: 15px; padding: 10px 60px; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">Перевести</button>
+
+        <form id="transfer-form" action="{% url 'transfer_money' game.id %}" method="post" style="display:none; margin-top: 10px;">
+            {% csrf_token %}
+            <select name="receiver" required>
+                {% for gp in players %}
+                    {% if gp.user != request.user %}
+                        <option value="{{ gp.user.playerprofile.id }}">{{ gp.user.username }}</option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+            <input type="number" name="amount" min="1" placeholder="Сумма" required style="width: 100px;">
+            <button type="submit" style="padding: 4px 12px;">OK</button>
+        </form>
     </div>
 
     <!-- Переизбрание гос деятеля -->
