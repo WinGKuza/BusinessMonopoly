@@ -1,77 +1,97 @@
 {% extends 'main/base.html' %}
-
-{% block title %}Игра: {{ game.name|default:"Без названия" }}{% endblock %}
-
+{% load static %}
 {% block content %}
-<div class="container mt-4">
-    <h1 class="mb-3">Игра: {{ game.name|default:"Без названия" }}</h1>
-    
-    <p><strong>ID игры:</strong> {{ game.id }}</p>
-    <p><strong>Создана:</strong> {{ game.created_at|date:"d.m.Y H:i" }}</p>
+<div style="max-width: 800px; margin: auto; padding: 20px; background-color: #f8f9fa; border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,0.1); position: relative;">
+    <h2 style="text-align: center;">{{ game.name }}</h2>
 
-    <hr>
+    <!-- Шестерёнка + Выход -->
+    <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 12px; align-items: center;">
+        <!-- Шестерёнка -->
+        <div style="position: relative; display: inline-block;">
+            <button onclick="toggleSettingsMenu()" style="background: none; border: none; cursor: pointer; font-size: 22px;">⚙️</button>
+            <div id="settings-menu" style="display: none; position: absolute; right: 0; background: white; border: 1px solid #ccc; border-radius: 6px; padding: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 100;">
+                {% if user == game.creator %}
+                <form method="post" action="{% url 'toggle_host' game.id %}" style="margin-bottom: 10px;">
+                    {% csrf_token %}
+                    <button type="submit" style="background-color: #6c757d; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">{% if request.user.playerprofile.role == 0 %}Режим игрока{% else %}Режим наблюдателя{% endif %}</button>
+                </form>
+                <form method="post" action="{% url 'delete_game' game.id %}" onsubmit="return confirm('Вы уверены, что хотите удалить игру?')">
+                    {% csrf_token %}
+                    <button type="submit" style="background-color: #ff4d4f; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">Удалить игру</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
 
-    <h4>Игроки (пока не реализовано)</h4>
-    <p>Список игроков, действия и игровой процесс будут здесь.</p>
+        <!-- Кнопка выхода -->
+        <form method="post" action="{% url 'leave_game' game.id %}" style="margin: 0;">
+            {% csrf_token %}
+            <button type="submit" title="Выйти" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #dc3545; padding: 0;">🚪</button>
+        </form>
 
-    {% if request.user == game.creator %}
-      <!-- Кнопка "Удалить игру" для создателя -->
-      <button id="deleteGameBtn" class="btn btn-danger mt-3">Удалить игру</button>
+    </div>
+
+    <script>
+        function toggleSettingsMenu() {
+            const menu = document.getElementById("settings-menu");
+            menu.style.display = menu.style.display === "block" ? "none" : "block";
+        }
+    </script>
+
+    <!-- Таймер игры -->
+    <p style="text-align: center; font-size: 18px;">
+        Время игры: <span id="game-timer" style="font-weight: bold;">00:00:00</span>
+        {% if is_paused %}<em>(пауза)</em>{% endif %}
+    </p>
+
+    <script>
+        let elapsed = {{ elapsed_seconds|default:0 }};
+        const paused = {{ is_paused|yesno:'true,false' }}, timerElement = document.getElementById('game-timer');
+        function secondsToHMS(d) {
+            d = Number(d);
+            const h = Math.floor(d / 3600);
+            const m = Math.floor((d % 3600) / 60);
+            const s = Math.floor(d % 60);
+            return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+        }
+        function updateTimer() {
+            timerElement.innerText = secondsToHMS(elapsed);
+            if (!paused) elapsed++;
+        }
+        setInterval(updateTimer, 1000);
+        updateTimer();
+    </script>
+
+    <!-- Ваши ресурсы -->
+    <div style="text-align: center; margin-top: 20px;">
+        <p><strong>Ваши ресурсы:</strong></p>
+        <p>Деньги: {{ request.user.playerprofile.money }}</p>
+        <p>Влияние: {{ request.user.playerprofile.influence }}</p>
+        <button style="margin-top: 15px; padding: 10px 60px; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">Перевести</button>
+    </div>
+
+    <!-- Переизбрание гос деятеля -->
+    {% if election_due %}
+    <div style="text-align: center; margin-top: 10px;">
+        <a href="{% url 'reelect_state' game.id %}">Переизбрать гос деятеля</a>
+    </div>
+    {% endif %}
+
+    <!-- Список участников -->
+    <h3 style="text-align: center; margin-top: 20px;">Участники</h3>
+    {% if players %}
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+        {% for gp in players %}
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid #dee2e6; border-radius: 8px; background: #ffffff;">
+            <div>
+                <strong>Имя:</strong> {{ gp.user.username }}<br>
+                <strong>Роль:</strong> {{ gp.user.playerprofile.get_role_display }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="text-align: center;">Нет подключённых игроков.</p>
     {% endif %}
 </div>
-
-<!-- Модальное окно Bootstrap -->
-<div class="modal fade" id="exitModal" tabindex="-1" aria-labelledby="exitModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="exitModalLabel">Подтвердите удаление игры</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
-      </div>
-      <div class="modal-body">
-        Вы уверены, что хотите удалить игру? Это действие нельзя отменить.
-      </div>
-      <div class="modal-footer">
-        <button id="confirmDeleteBtn" type="button" class="btn btn-danger">Удалить</button>
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-  {% if request.user == game.creator %}
-  const deleteBtn = document.getElementById('deleteGameBtn');
-  const exitModalEl = document.getElementById('exitModal');
-  const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
-  const exitModal = new bootstrap.Modal(exitModalEl);
-
-  deleteBtn.addEventListener('click', () => {
-    exitModal.show();
-  });
-
-  confirmDeleteBtn.addEventListener('click', () => {
-    fetch("{% url 'delete_game' game.id %}", {
-      method: 'POST',
-      headers: {
-        'X-CSRFToken': '{{ csrf_token }}',
-        'Content-Type': 'application/json'
-      },
-      credentials: 'same-origin',
-    })
-    .then(response => response.json())
-    .then(data => {
-      if (data.status === 'deleted') {
-        window.location.href = '{% url "home" %}';
-      } else {
-        alert('Ошибка при удалении игры.');
-      }
-    })
-    .catch(err => {
-      console.error(err);
-      alert('Ошибка при удалении игры.');
-    });
-  });
-  {% endif %}
-</script>
 {% endblock %}
