@@ -22,7 +22,7 @@ class Game(models.Model):
     is_active = models.BooleanField(default=False)
 
     state_official = models.ForeignKey(
-        PlayerProfile,
+        'GamePlayer',
         null=True,
         blank=True,
         related_name='state_games',
@@ -83,3 +83,6 @@ class GamePlayer(models.Model):
 
     def __str__(self):
         return f"{self.user.username} in {self.game.name}"
+
+    def get_role_display(self):
+        return dict(self.ROLE_CHOICES).get(self.role, 'Неизвестно')

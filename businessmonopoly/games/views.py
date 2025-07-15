@@ -11,23 +11,29 @@ from django.db.models import F
 from .forms import GameCreateForm
 from .models import Game, GamePlayer, PlayerProfile
 
-def _update_pause_state(game: Game):
+def _update_pause_state(game):
     if game.game_players.exists():
         game.resume()
     else:
         game.pause()
 
+
+
+def assign_initial_role_and_resources(game_player):
+    if game_player.role == 0:
+        if random.random() < game_player.entrepreneur_chance:
+            game_player.role = 3  # Предприниматель
+        else:
+            game_player.role = 1  # Безработный
+        game_player.money = 10000
+        game_player.influence = 0
+        game_player.save()
+
 @require_POST
 @login_required
 def transfer_money(request, game_id):
     game = get_object_or_404(Game, id=game_id)
-
-    # Получаем отправителя и проверяем участие в игре
-    try:
-        sender_gp = GamePlayer.objects.get(game=game, user=request.user)
-    except GamePlayer.DoesNotExist:
-        messages.error(request, "Вы не участвуете в этой игре.")
-        return redirect('game_detail', game_id=game_id)
+    sender = get_object_or_404(GamePlayer, game=game, user=request.user)
 
     receiver_id = request.POST.get('receiver')
     amount = int(request.POST.get('amount', 0))
@@ -36,25 +42,23 @@ def transfer_money(request, game_id):
         messages.error(request, 'Сумма должна быть положительной.')
         return redirect('game_detail', game_id=game_id)
 
-    # Получаем получателя (GamePlayer по ID профиля)
     try:
-        receiver_profile = PlayerProfile.objects.get(id=receiver_id)
-        receiver_gp = GamePlayer.objects.get(game=game, user=receiver_profile.user)
-    except (PlayerProfile.DoesNotExist, GamePlayer.DoesNotExist):
+        receiver = GamePlayer.objects.get(id=receiver_id, game=game)
+    except GamePlayer.DoesNotExist:
         messages.error(request, 'Получатель не найден в этой игре.')
         return redirect('game_detail', game_id=game_id)
 
-    if sender_gp.money < amount:
+    if sender.money < amount:
         messages.error(request, 'Недостаточно денег.')
         return redirect('game_detail', game_id=game_id)
 
-    # Транзакция
     with transaction.atomic():
-        GamePlayer.objects.filter(id=sender_gp.id).update(money=F('money') - amount)
-        GamePlayer.objects.filter(id=receiver_gp.id).update(money=F('money') + amount)
+        GamePlayer.objects.filter(id=sender.id).update(money=F('money') - amount)
+        GamePlayer.objects.filter(id=receiver.id).update(money=F('money') + amount)
 
-    messages.success(request, f'Переведено {amount} ₽ игроку {receiver_gp.user.username}.')
+    messages.success(request, f'Переведено {amount} ₽ игроку {receiver.user.username}.')
     return redirect('game_detail', game_id=game_id)
+
 
 
 @login_required
@@ -131,7 +135,6 @@ def delete_game(request, game_id):
 def create_game(request):
     active_game = Game.objects.filter(creator=request.user, is_active=True).first()
     if active_game:
-        messages.warning(request, "У вас уже есть активная игра. Вы будете перенаправлены к ней.")
         return redirect('game_detail', game_id=active_game.id)
 
     if request.method == 'POST':
@@ -144,20 +147,14 @@ def create_game(request):
             return redirect('join_game', game_id=game.id)
     else:
         form = GameCreateForm()
-
     return render(request, 'games/create_game.html', {'form': form})
 
 @login_required
 def join_game(request, game_id):
     game = get_object_or_404(Game, id=game_id)
-    gp, created = GamePlayer.objects.get_or_create(game=game, user=request.user)
+    game_player, created = GamePlayer.objects.get_or_create(game=game, user=request.user)
     if created:
-        chance = gp.entrepreneur_chance
-        gp.role = 3 if random.random() < chance else 1
-        gp.money = 10000
-        gp.influence = 0
-        gp.save()
-
+        assign_initial_role_and_resources(game_player)
     _update_pause_state(game)
     return redirect('game_detail', game_id=game.id)
 
@@ -177,23 +174,19 @@ def game_list(request):
 @login_required
 def game_detail(request, game_id):
     game = get_object_or_404(Game, id=game_id)
-    players = GamePlayer.objects.filter(game=game).select_related('user', 'user__playerprofile')
-
-    # Получаем текущего игрока
-    try:
-        current_player = GamePlayer.objects.get(game=game, user=request.user)
-    except GamePlayer.DoesNotExist:
-        current_player = None
+    players = GamePlayer.objects.filter(game=game).select_related('user')
+    player = GamePlayer.objects.filter(game=game, user=request.user).first()
 
     context = {
         'game': game,
         'players': players,
-        'player': current_player,
+        'player': player,
         'elapsed_seconds': game.elapsed_seconds(),
         'election_due': game.election_due(),
         'is_paused': game.is_paused(),
     }
     return render(request, 'games/game_detail.html', context)
+
 
 
 @login_required
