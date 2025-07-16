@@ -1,9 +1,8 @@
 import uuid
-import datetime
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
-
+from datetime import timedelta
 
 class PlayerProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -21,6 +20,11 @@ class Game(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=False)
 
+    # Настройки игры
+    entrepreneur_chance = models.FloatField(default=0.3)
+    election_interval = models.DurationField(default=timedelta(minutes=90))
+
+    # Политическая механика
     state_official = models.ForeignKey(
         'GamePlayer',
         null=True,
@@ -29,8 +33,8 @@ class Game(models.Model):
         on_delete=models.SET_NULL,
     )
     last_election_time = models.DateTimeField(default=timezone.now)
-    STATE_ELECTION_INTERVAL = datetime.timedelta(hours=1, minutes=30)
 
+    # Пауза
     paused_at = models.DateTimeField(null=True, blank=True)
     total_paused_seconds = models.IntegerField(default=0)
 
@@ -55,7 +59,7 @@ class Game(models.Model):
         return max(elapsed, 0)
 
     def election_due(self):
-        return timezone.now() - self.last_election_time >= self.STATE_ELECTION_INTERVAL
+        return timezone.now() - self.last_election_time >= self.election_interval
 
     def __str__(self):
         return self.name
@@ -68,10 +72,9 @@ class GamePlayer(models.Model):
         (2, 'Работник'),
         (3, 'Предприниматель'),
         (4, 'Банкир'),
-        (5, 'Государственный деятель'),
+        (5, 'Политик'),
     ]
     role = models.IntegerField(choices=ROLE_CHOICES, default=0)
-    entrepreneur_chance = models.FloatField(default=0.3)
     game = models.ForeignKey(Game, related_name='game_players', on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='game_players', on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)

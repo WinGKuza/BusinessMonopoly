@@ -49,7 +49,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'main',
     'accounts',
-    'games'
+    'games',
+    'channels'
 ]
 
 LOGIN_REDIRECT_URL = '/'
@@ -99,8 +100,17 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'businessmonopoly.wsgi.application'
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("127.0.0.1", 6379)],
+        },
+    },
+}
 
+WSGI_APPLICATION = 'businessmonopoly.wsgi.application'
+ASGI_APPLICATION = 'businessmonopoly.asgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases

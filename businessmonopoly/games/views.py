@@ -1,5 +1,5 @@
 import random
-
+import datetime
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
@@ -8,7 +8,7 @@ from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import F
-from .forms import GameCreateForm
+from .forms import GameCreateForm, GameSettingsForm
 from .models import Game, GamePlayer, PlayerProfile
 
 def _update_pause_state(game):
@@ -18,16 +18,29 @@ def _update_pause_state(game):
         game.pause()
 
 
-
 def assign_initial_role_and_resources(game_player):
     if game_player.role == 0:
-        if random.random() < game_player.entrepreneur_chance:
+        if random.random() < game_player.game.entrepreneur_chance:
             game_player.role = 3  # Предприниматель
         else:
             game_player.role = 1  # Безработный
         game_player.money = 10000
         game_player.influence = 0
         game_player.save()
+
+
+@login_required
+@require_POST
+def update_game_settings(request, game_id):
+    game = get_object_or_404(Game, id=game_id, creator=request.user)
+    form = GameSettingsForm(request.POST, instance=game)
+    if form.is_valid():
+        form.save()
+        messages.success(request, "Настройки игры обновлены.")
+    else:
+        messages.error(request, "Ошибка при сохранении настроек.")
+    return redirect('game_detail', game_id=game.id)
+
 
 @require_POST
 @login_required
@@ -171,11 +184,14 @@ def game_list(request):
     games = Game.objects.filter(is_active=True)
     return render(request, 'games/game_list.html', {'games': games})
 
+
 @login_required
 def game_detail(request, game_id):
     game = get_object_or_404(Game, id=game_id)
     players = GamePlayer.objects.filter(game=game).select_related('user')
     player = GamePlayer.objects.filter(game=game, user=request.user).first()
+
+    settings_form = GameSettingsForm(instance=game) if request.user == game.creator else None
 
     context = {
         'game': game,
@@ -184,6 +200,7 @@ def game_detail(request, game_id):
         'elapsed_seconds': game.elapsed_seconds(),
         'election_due': game.election_due(),
         'is_paused': game.is_paused(),
+        'settings_form': settings_form,
     }
     return render(request, 'games/game_detail.html', context)
 

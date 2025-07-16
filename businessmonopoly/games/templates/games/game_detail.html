@@ -9,14 +9,21 @@
         {% if user == game.creator %}
         <div style="position: relative; display: inline-block;">
             <button onclick="toggleSettingsMenu()" style="background: none; border: none; cursor: pointer; font-size: 22px;">⚙️</button>
-            <div id="settings-menu" style="display: none; position: absolute; right: 0; background: white; border: 1px solid #ccc; border-radius: 6px; padding: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 100;">
+            <div id="settings-menu" style="display: none; position: absolute; right: 0; background: white; border: 1px solid #ccc; border-radius: 6px; padding: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 100; min-width: 250px;">
+                <form method="post" action="{% url 'update_game_settings' game.id %}" style="margin-bottom: 10px;">
+                    {% csrf_token %}
+                    {{ settings_form.as_p }}
+                    <button type="submit" style="margin-top: 10px; background-color: #198754; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">Сохранить настройки</button>
+                </form>
+
                 <form method="post" action="{% url 'toggle_host' game.id %}" style="margin-bottom: 10px;">
                     {% csrf_token %}
                     <button type="submit" style="background-color: #6c757d; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
                         {% if player.role == 0 %}Режим игрока{% else %}Режим наблюдателя{% endif %}
                     </button>
                 </form>
-                <form method="post" action="{% url 'delete_game' game.id %}" onsubmit="return confirm('Вы уверены, что хотите удалить игру?')">
+
+                <form method="post" action="{% url 'delete_game' game.id %}" onsubmit="return confirm('Вы уверены, что хотите удалить игру?')" style="margin-bottom: 10px;">
                     {% csrf_token %}
                     <button type="submit" style="background-color: #ff4d4f; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
                         Удалить игру
@@ -87,7 +94,7 @@
 
     {% if election_due %}
     <div style="text-align: center; margin-top: 10px;">
-        <a href="{% url 'reelect_state' game.id %}">Переизбрать гос деятеля</a>
+        <a href="{% url 'reelect_state' game.id %}">Переизбрать Политика</a>
     </div>
     {% endif %}
 

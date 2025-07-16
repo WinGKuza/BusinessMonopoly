@@ -11,6 +11,7 @@ urlpatterns = [
     path('<uuid:game_id>/delete/', views.delete_game, name='delete_game'),
     path('<uuid:game_id>/toggle_host/', views.toggle_host_mode, name='toggle_host'),
     path('<uuid:game_id>/reelect/', views.reelect_state_official, name='reelect_state'),
+    path('<uuid:game_id>/settings/', views.update_game_settings, name='update_game_settings'),
     path('<uuid:game_id>/appoint_banker/<int:player_id>/', views.appoint_banker, name='appoint_banker'),
     path('<uuid:game_id>/join/', views.join_game, name='join_game'),
     path('<uuid:game_id>/leave/', views.leave_game, name='leave_game'),
