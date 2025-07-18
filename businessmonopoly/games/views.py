@@ -12,7 +12,7 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
 from .forms import GameCreateForm, GameSettingsForm
-from .models import Game, GamePlayer, PlayerProfile
+from .models import Game, GamePlayer
 
 
 @require_POST
@@ -43,14 +43,13 @@ def _update_pause_state(game):
 
 
 def assign_initial_role_and_resources(game_player):
-    if game_player.role == 0:
-        if random.random() < game_player.game.entrepreneur_chance:
-            game_player.role = 3  # Предприниматель
-        else:
-            game_player.role = 1  # Безработный
-        game_player.money = 10000
-        game_player.influence = 0
-        game_player.save()
+    if random.random() < game_player.game.entrepreneur_chance:
+        game_player.role = 3  # Предприниматель
+    else:
+        game_player.role = 1  # Безработный
+    game_player.money = 10000
+    game_player.influence = 0
+    game_player.save()
 
 
 @login_required
@@ -102,11 +101,11 @@ def transfer_money(request, game_id):
 
 
 @login_required
-def toggle_host_mode(request, game_id):
+def toggle_mode(request, game_id):
     game = get_object_or_404(Game, id=game_id, creator=request.user)
-    profile = request.user.playerprofile
-    profile.is_host = not profile.is_host
-    profile.save()
+    player = get_object_or_404(GamePlayer, game=game, user=request.user)
+    player.is_observer = not player.is_observer
+    player.save()
     send_game_update(game.id)
     return redirect('game_detail', game_id=game.id)
 
@@ -176,6 +175,7 @@ def delete_game(request, game_id):
 def create_game(request):
     active_game = Game.objects.filter(creator=request.user, is_active=True).first()
     if active_game:
+        messages.warning(request, 'У вас уже есть созданная игра. Вы перенаправлены к ней.')
         return redirect('game_detail', game_id=active_game.id)
 
     if request.method == 'POST':

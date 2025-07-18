@@ -4,13 +4,6 @@ from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
 
-class PlayerProfile(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    is_host = models.BooleanField(default=False)
-
-    def __str__(self):
-        return f"{self.user.username}"
-
 
 class Game(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -67,20 +60,20 @@ class Game(models.Model):
 
 class GamePlayer(models.Model):
     ROLE_CHOICES = [
-        (0, 'Наблюдатель'),
         (1, 'Безработный'),
         (2, 'Работник'),
         (3, 'Предприниматель'),
         (4, 'Банкир'),
         (5, 'Политик'),
     ]
-    role = models.IntegerField(choices=ROLE_CHOICES, default=0)
+    role = models.IntegerField(choices=ROLE_CHOICES, default=1)
     game = models.ForeignKey(Game, related_name='game_players', on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='game_players', on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
     money = models.IntegerField(default=10000)
     influence = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    is_observer = models.BooleanField(default=False)
 
     class Meta:
         unique_together = ('game', 'user')
