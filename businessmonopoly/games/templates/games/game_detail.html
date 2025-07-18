@@ -71,11 +71,11 @@
     </script>
 
     <!-- Ваши ресурсы -->
-    <div style="text-align: center; margin-top: 20px;">
+    <div id="player-info" style="text-align: center; margin-top: 20px;">
         <p><strong>Ваши ресурсы:</strong></p>
-        <p>Деньги: {{ player.money }}</p>
-        <p>Влияние: {{ player.influence }}</p>
-        <p>Роль: {{ player.get_role_display }}</p>
+        <p>Деньги: <span id="player-money">{{ player.money }}</span> ₽</p>
+        <p>Влияние: <span id="player-influence">{{ player.influence }} ⭐</span></p>
+        <p>Роль: <span id="player-role">{{ player.get_role_display }}</span></p>
         <button onclick="document.getElementById('transfer-form').style.display='block'" style="margin-top: 15px; padding: 10px 60px; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">Перевести</button>
 
         <form id="transfer-form" action="{% url 'transfer_money' game.id %}" method="post" style="display:none; margin-top: 10px;">
@@ -100,19 +100,33 @@
 
     <!-- Список участников -->
     <h3 style="text-align: center; margin-top: 20px;">Участники</h3>
-    {% if players %}
-    <div style="display: flex; flex-direction: column; gap: 12px;">
+    <div id="players-list">
         {% for gp in players %}
-        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid #dee2e6; border-radius: 8px; background: #ffffff;">
+        <div class="player-card" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid #dee2e6; border-radius: 8px; background: #ffffff;">
             <div>
                 <strong>Имя:</strong> {{ gp.user.username }}<br>
                 <strong>Роль:</strong> {{ gp.get_role_display }}<br>
+                <strong>Деньги:</strong> {{ gp.money }} ₽<br>
+                <strong>Влияние:</strong> {{ gp.influence }} ⭐
             </div>
         </div>
         {% endfor %}
     </div>
-    {% else %}
-    <p style="text-align: center;">Нет подключённых игроков.</p>
-    {% endif %}
 </div>
+
+<script>
+const gameId = "{{ game.id }}";
+const socket = new WebSocket(`ws://${window.location.host}/ws/game/${gameId}/`);
+
+socket.onmessage = function(e) {
+    const data = JSON.parse(e.data);
+    if (data.type === 'update') {
+        const update = data.data;
+        if (update.money !== undefined) document.getElementById('player-money').textContent = update.money;
+        if (update.influence !== undefined) document.getElementById('player-influence').textContent = update.influence;
+        if (update.role !== undefined) document.getElementById('player-role').textContent = update.role;
+        if (update.players_html !== undefined) document.getElementById('players-list').innerHTML = update.players_html;
+    }
+};
+</script>
 {% endblock %}

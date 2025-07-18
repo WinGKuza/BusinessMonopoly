@@ -1,5 +1,4 @@
 import random
-import datetime
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
@@ -8,8 +7,33 @@ from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import F
+
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
 from .forms import GameCreateForm, GameSettingsForm
 from .models import Game, GamePlayer, PlayerProfile
+
+
+@require_POST
+@login_required
+def save_game(request, game_id):
+    game = get_object_or_404(Game, id=game_id, creator=request.user)
+    game.is_active = True
+    game.save()
+    return JsonResponse({'status': 'saved'})
+
+
+# === Helper to send updates to all clients ===
+def send_game_update(game_id):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f'game_{game_id}',
+        {
+            'type': 'game_update',
+            'data': 'refresh',  # clients will interpret as "reload data"
+        }
+    )
 
 def _update_pause_state(game):
     if game.game_players.exists():
@@ -36,6 +60,7 @@ def update_game_settings(request, game_id):
     form = GameSettingsForm(request.POST, instance=game)
     if form.is_valid():
         form.save()
+        send_game_update(game.id)
         messages.success(request, "Настройки игры обновлены.")
     else:
         messages.error(request, "Ошибка при сохранении настроек.")
@@ -58,20 +83,22 @@ def transfer_money(request, game_id):
     try:
         receiver = GamePlayer.objects.get(id=receiver_id, game=game)
     except GamePlayer.DoesNotExist:
-        messages.error(request, 'Получатель не найден в этой игре.')
+        messages.error(request, 'Получатель не найден.')
         return redirect('game_detail', game_id=game_id)
 
     if sender.money < amount:
-        messages.error(request, 'Недостаточно денег.')
+        messages.error(request, 'Недостаточно средств.')
         return redirect('game_detail', game_id=game_id)
 
     with transaction.atomic():
-        GamePlayer.objects.filter(id=sender.id).update(money=F('money') - amount)
-        GamePlayer.objects.filter(id=receiver.id).update(money=F('money') + amount)
+        sender.money -= amount
+        receiver.money += amount
+        sender.save()
+        receiver.save()
 
+    send_game_update(game.id)
     messages.success(request, f'Переведено {amount} ₽ игроку {receiver.user.username}.')
     return redirect('game_detail', game_id=game_id)
-
 
 
 @login_required
@@ -80,22 +107,26 @@ def toggle_host_mode(request, game_id):
     profile = request.user.playerprofile
     profile.is_host = not profile.is_host
     profile.save()
+    send_game_update(game.id)
     return redirect('game_detail', game_id=game.id)
+
 
 @login_required
 def reelect_state_official(request, game_id):
     game = get_object_or_404(Game, id=game_id)
+
     if not game.election_due():
         messages.warning(request, 'Переизбрание возможно раз в 1.5 часа.')
         return redirect('game_detail', game_id=game.id)
 
-    players = GamePlayer.objects.filter(game=game)
+    players = GamePlayer.objects.filter(game=game, is_active=True)
     if not players:
         messages.error(request, 'Нет игроков для голосования.')
         return redirect('game_detail', game_id=game.id)
 
     new_official = max(players, key=lambda p: p.influence)
 
+    # Снятие текущего политика
     if game.state_official and game.state_official != new_official.user.playerprofile:
         old_profile = game.state_official
         old_gp = GamePlayer.objects.filter(game=game, user=old_profile.user).first()
@@ -110,30 +141,26 @@ def reelect_state_official(request, game_id):
     game.last_election_time = timezone.now()
     game.save()
 
+    send_game_update(game.id)
     messages.success(request, f'Новый государственный деятель: {new_official.user.username}')
     return redirect('game_detail', game_id=game.id)
+
 
 @login_required
 def appoint_banker(request, game_id, player_id):
     game = get_object_or_404(Game, id=game_id)
     if game.state_official != request.user.playerprofile:
-        messages.error(request, 'Только государственный деятель может назначать банкира.')
-        return redirect('game_detail', game_id=game.id)
+        messages.error(request, 'Только гос. деятель может назначать банкира.')
+        return redirect('game_detail', game_id=game_id)
 
     target_gp = get_object_or_404(GamePlayer, id=player_id, game=game)
     target_gp.role = 4
     target_gp.save()
 
+    send_game_update(game.id)
     messages.success(request, f'{target_gp.user.username} назначен банкиром.')
     return redirect('game_detail', game_id=game.id)
 
-@login_required
-@require_POST
-def save_game(request, game_id):
-    game = get_object_or_404(Game, id=game_id, creator=request.user)
-    game.is_active = True
-    game.save()
-    return JsonResponse({'status': 'saved'})
 
 @login_required
 @require_POST
@@ -143,6 +170,7 @@ def delete_game(request, game_id):
         game.delete()
         return redirect('create_game')
     return redirect('game_detail', game_id=game_id)
+
 
 @login_required
 def create_game(request):
@@ -162,38 +190,50 @@ def create_game(request):
         form = GameCreateForm()
     return render(request, 'games/create_game.html', {'form': form})
 
+
 @login_required
 def join_game(request, game_id):
     game = get_object_or_404(Game, id=game_id)
+
     game_player, created = GamePlayer.objects.get_or_create(game=game, user=request.user)
+
     if created:
+        # игрок только что создан → назначаем стартовую роль и ресурсы
         assign_initial_role_and_resources(game_player)
+    else:
+        # игрок уже был, возможно выходил → просто активируем
+        game_player.is_active = True
+        game_player.save()
+
     _update_pause_state(game)
     return redirect('game_detail', game_id=game.id)
 
-@login_required
+
+
+
 @require_POST
+@login_required
 def leave_game(request, game_id):
     game = get_object_or_404(Game, id=game_id)
-    GamePlayer.objects.filter(game=game, user=request.user).delete()
+    try:
+        player = GamePlayer.objects.get(game=game, user=request.user)
+        player.is_active = False
+        player.save()
+    except GamePlayer.DoesNotExist:
+        pass
     _update_pause_state(game)
     return redirect('game_list')
-
-@login_required
-def game_list(request):
-    games = Game.objects.filter(is_active=True)
-    return render(request, 'games/game_list.html', {'games': games})
 
 
 @login_required
 def game_detail(request, game_id):
     game = get_object_or_404(Game, id=game_id)
-    players = GamePlayer.objects.filter(game=game).select_related('user')
+    players = GamePlayer.objects.filter(game=game, is_active=True).select_related('user')
     player = GamePlayer.objects.filter(game=game, user=request.user).first()
 
     settings_form = GameSettingsForm(instance=game) if request.user == game.creator else None
 
-    context = {
+    return render(request, 'games/game_detail.html', {
         'game': game,
         'players': players,
         'player': player,
@@ -201,9 +241,13 @@ def game_detail(request, game_id):
         'election_due': game.election_due(),
         'is_paused': game.is_paused(),
         'settings_form': settings_form,
-    }
-    return render(request, 'games/game_detail.html', context)
+    })
 
+
+@login_required
+def game_list(request):
+    games = Game.objects.filter(is_active=True)
+    return render(request, 'games/game_list.html', {'games': games})
 
 
 @login_required

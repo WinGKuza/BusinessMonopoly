@@ -80,6 +80,7 @@ class GamePlayer(models.Model):
     joined_at = models.DateTimeField(auto_now_add=True)
     money = models.IntegerField(default=10000)
     influence = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         unique_together = ('game', 'user')
