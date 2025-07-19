@@ -25,6 +25,11 @@ class GameSettingsForm(forms.ModelForm):
         help_text='Формат: чч:мм:сс',
     )
 
+    election_duration = forms.DurationField(
+        label='Длительность выборов',
+        help_text='Формат: чч:мм:сс',
+    )
+
     class Meta:
         model = Game
-        fields = ['entrepreneur_chance', 'election_interval']
+        fields = ['entrepreneur_chance', 'election_interval', 'election_duration']

@@ -16,6 +16,7 @@ class Game(models.Model):
     # Настройки игры
     entrepreneur_chance = models.FloatField(default=0.3)
     election_interval = models.DurationField(default=timedelta(minutes=90))
+    election_duration = models.DurationField(default=timedelta(seconds=30))
 
     # Политическая механика
     state_official = models.ForeignKey(
@@ -63,10 +64,14 @@ class GamePlayer(models.Model):
         (1, 'Безработный'),
         (2, 'Работник'),
         (3, 'Предприниматель'),
-        (4, 'Банкир'),
-        (5, 'Политик'),
+    ]
+    SPECIAL_ROLE_CHOICES = [
+        (0, ''),
+        (1, 'Банкир'),
+        (2, 'Политик'),
     ]
     role = models.IntegerField(choices=ROLE_CHOICES, default=1)
+    special_role = models.IntegerField(choices=ROLE_CHOICES, default=0)
     game = models.ForeignKey(Game, related_name='game_players', on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='game_players', on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
