@@ -12,20 +12,12 @@ class Game(models.Model):
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='created_games', on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=False)
+    is_voting = models.BooleanField(default=False)
 
     # Настройки игры
     entrepreneur_chance = models.FloatField(default=0.3)
     election_interval = models.DurationField(default=timedelta(minutes=90))
     election_duration = models.DurationField(default=timedelta(seconds=30))
-
-    # Политическая механика
-    state_official = models.ForeignKey(
-        'GamePlayer',
-        null=True,
-        blank=True,
-        related_name='state_games',
-        on_delete=models.SET_NULL,
-    )
     last_election_time = models.DateTimeField(default=timezone.now)
 
     # Пауза
@@ -87,4 +79,4 @@ class GamePlayer(models.Model):
         return f"{self.user.username} in {self.game.name}"
 
     def get_role_display(self):
-        return dict(self.ROLE_CHOICES).get(self.role, 'Неизвестно')
+        return dict(self.ROLE_CHOICES).get(self.role, 'Неизвестно') if not self.special_role else dict(self.SPECIAL_ROLE_CHOICES).get(self.special_role, 'Неизвестно')

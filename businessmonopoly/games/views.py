@@ -6,8 +6,7 @@ from django.http import JsonResponse
 from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import F
-
+from functools import wraps
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
@@ -36,10 +35,11 @@ def send_game_update(game_id):
     )
 
 def _update_pause_state(game):
-    if game.game_players.exists():
-        game.resume()
-    else:
-        game.pause()
+    if not game.is_paused():
+        if game.game_players.filter(is_active=True, is_observer=False).exists():
+            game.resume()
+        else:
+            game.pause()
 
 
 def assign_initial_role_and_resources(game_player):
@@ -50,6 +50,38 @@ def assign_initial_role_and_resources(game_player):
     game_player.money = 10000
     game_player.influence = 0
     game_player.save()
+
+
+@login_required
+@require_POST
+def toggle_pause(request, game_id):
+    game = get_object_or_404(Game, id=game_id)
+    if request.user != game.creator:
+        return JsonResponse({'error': 'Forbidden'}, status=403)
+
+    if game.is_paused():
+        game.resume()
+    else:
+        game.pause()
+
+    send_game_update(game.id)  # Обновит состояние у всех клиентов
+    return redirect('game_detail', game_id=game.id)
+
+
+def pause_protected(view_func):
+    @wraps(view_func)
+    def _wrapped_view(request, game_id, *args, **kwargs):
+        game = get_object_or_404(Game, id=game_id)
+        if game.is_paused():
+            if request.headers.get('x-requested-with') == 'XMLHttpRequest':
+                return JsonResponse({'error': 'Игра на паузе'}, status=403)
+            else:
+                from django.contrib import messages
+                messages.warning(request, "Игра на паузе. Действия временно недоступны.")
+                from django.shortcuts import redirect
+                return redirect('game_detail', game_id=game.id)
+        return view_func(request, game_id, *args, **kwargs)
+    return _wrapped_view
 
 
 @login_required
@@ -68,6 +100,7 @@ def update_game_settings(request, game_id):
 
 @require_POST
 @login_required
+@pause_protected
 def transfer_money(request, game_id):
     game = get_object_or_404(Game, id=game_id)
     sender = get_object_or_404(GamePlayer, game=game, user=request.user)
@@ -100,6 +133,7 @@ def transfer_money(request, game_id):
     return redirect('game_detail', game_id=game_id)
 
 
+
 @login_required
 def toggle_mode(request, game_id):
     game = get_object_or_404(Game, id=game_id, creator=request.user)
@@ -107,10 +141,12 @@ def toggle_mode(request, game_id):
     player.is_observer = not player.is_observer
     player.save()
     send_game_update(game.id)
+    _update_pause_state(game)
     return redirect('game_detail', game_id=game.id)
 
 
 @login_required
+@pause_protected
 def reelect_state_official(request, game_id):
     game = get_object_or_404(Game, id=game_id)
 
@@ -146,6 +182,7 @@ def reelect_state_official(request, game_id):
 
 
 @login_required
+@pause_protected
 def appoint_banker(request, game_id, player_id):
     game = get_object_or_404(Game, id=game_id)
     if game.state_official != request.user.playerprofile:
@@ -176,7 +213,7 @@ def create_game(request):
     active_game = Game.objects.filter(creator=request.user, is_active=True).first()
     if active_game:
         messages.warning(request, 'У вас уже есть созданная игра. Вы перенаправлены к ней.')
-        return redirect('game_detail', game_id=active_game.id)
+        return redirect('join_game', game_id=active_game.id)
 
     if request.method == 'POST':
         form = GameCreateForm(request.POST)

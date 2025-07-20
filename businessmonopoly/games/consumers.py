@@ -1,6 +1,7 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 
+
 class GameConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.game_id = self.scope['url_route']['kwargs']['game_id']
@@ -62,4 +63,14 @@ class GameConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             'type': 'update',
             'data': event['data'],
+        }))
+
+    async def voting_started(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'voting_started'
+        }))
+
+    async def voting_ended(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'voting_ended'
         }))
