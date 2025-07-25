@@ -6,6 +6,7 @@ class GameConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.game_id = self.scope['url_route']['kwargs']['game_id']
         self.room_group_name = f'game_{self.game_id}'
+        self.user_group_name = f"user_{self.scope['user'].id}"
 
         # Проверка авторизации
         if not self.scope["user"].is_authenticated:
@@ -13,10 +14,12 @@ class GameConsumer(AsyncWebsocketConsumer):
             return
 
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        await self.channel_layer.group_add(self.user_group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+        await self.channel_layer.group_discard(self.user_group_name, self.channel_name)
 
     async def receive(self, text_data):
         try:
@@ -42,15 +45,16 @@ class GameConsumer(AsyncWebsocketConsumer):
         # Обработка команд (расширяемый механизм)
         elif msg_type == "command":
             command = data.get("command", "unknown")
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    'type': 'game_update',
-                    'data': {
-                        'message': f"Команда '{command}' от {self.scope['user'].username}",
+            if command == "refresh":
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'game_update',
+                        'data': {
+                            'message': f"Команда '{command}' от {self.scope['user'].username}",
+                        }
                     }
-                }
-            )
+                )
 
     async def chat_message(self, event):
         await self.send(text_data=json.dumps({
@@ -73,4 +77,11 @@ class GameConsumer(AsyncWebsocketConsumer):
     async def voting_ended(self, event):
         await self.send(text_data=json.dumps({
             'type': 'voting_ended'
+        }))
+
+    async def personal_message(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "personal",
+            "message": event["message"],
+            "level": event.get("level", "info"),
         }))

@@ -1,6 +1,16 @@
 {% extends 'main/base.html' %}
 {% load static %}
 {% block content %}
+
+<!-- Блок для сообщений -->
+<div id="message-box" style="display: none; padding: 15px 20px; margin: 20px auto; max-width: 800px; border-radius: 6px; text-align: center; font-size: 18px; font-weight: 500; box-shadow: 0 2px 6px rgba(0,0,0,0.1); transition: opacity 0.3s ease; opacity: 1;"></div>
+
+<script>
+    window.gameId = "{{ game.id }}";
+    window.csrfToken = "{{ csrf_token }}";
+    window.isObserver = {{ player.is_observer|yesno:"true,false" }};
+</script>
+
 <div style="max-width: 800px; margin: auto; padding: 20px; background-color: #f8f9fa; border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,0.1); position: relative;">
     <h2 style="text-align: center;">{{ game.name }}</h2>
 
@@ -10,40 +20,28 @@
         <div style="position: relative; display: inline-block;">
             <button onclick="toggleSettingsMenu()" style="background: none; border: none; cursor: pointer; font-size: 22px;">⚙️</button>
             <div id="settings-menu" style="display: none; position: absolute; right: 0; background: white; border: 1px solid #ccc; border-radius: 6px; padding: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 100; min-width: 250px;">
-                <form method="post" action="{% url 'toggle_pause' game.id %}" style="margin-bottom: 10px;">
-                    {% csrf_token %}
-                    <button type="submit"
-                            style="margin-top: 10px; background-color: #0d6efd; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
-                        {% if game.is_paused %}▶️ Возобновить игру{% else %}⏸ Поставить на паузу{% endif %}
-                    </button>
-                </form>
-                <form method="post" action="{% url 'update_game_settings' game.id %}" style="margin-bottom: 10px;">
+                <button id="pause-button" onclick="togglePause()" style="margin-top: 10px; background-color: #0d6efd; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
+                    {% if game.is_paused %}▶️ Возобновить игру{% else %}⏸ Поставить на паузу{% endif %}
+                </button>
+
+                <form id="settings-form" style="margin-top: 10px;">
                     {% csrf_token %}
                     {{ settings_form.as_p }}
                     <button type="submit" style="margin-top: 10px; background-color: #198754; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">Сохранить настройки</button>
                 </form>
 
-                <form method="post" action="{% url 'toggle_mode' game.id %}" style="margin-bottom: 10px;">
-                    {% csrf_token %}
-                    <button type="submit" style="background-color: #6c757d; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
-                        {% if player.is_observer %}Режим игрока{% else %}Режим наблюдателя{% endif %}
-                    </button>
-                </form>
+                <button id="mode-toggle-button" onclick="toggleMode()" style="background-color: #6c757d; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%; margin-top: 10px;">
+                    {% if player.is_observer %}Режим игрока{% else %}Режим наблюдателя{% endif %}
+                </button>
 
-                <form method="post" action="{% url 'delete_game' game.id %}" onsubmit="return confirm('Вы уверены, что хотите удалить игру?')" style="margin-bottom: 10px;">
-                    {% csrf_token %}
-                    <button type="submit" style="background-color: #ff4d4f; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%;">
-                        Удалить игру
-                    </button>
-                </form>
+                <button onclick="deleteGame()" style="background-color: #ff4d4f; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%; margin-top: 10px;">
+                    Удалить игру
+                </button>
             </div>
         </div>
         {% endif %}
 
-        <form method="post" action="{% url 'leave_game' game.id %}" style="margin: 0;">
-            {% csrf_token %}
-            <button type="submit" title="Выйти" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #dc3545; padding: 0;">🚪</button>
-        </form>
+        <button onclick="leaveGame()" title="Выйти" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #dc3545; padding: 0;">🚪</button>
     </div>
 
     <script>
@@ -56,46 +54,33 @@
     <!-- Таймер игры -->
     <p style="text-align: center; font-size: 18px;">
         Время игры: <span id="game-timer" style="font-weight: bold;">00:00:00</span>
-        {% if is_paused %}<em>(пауза)</em>{% endif %}
+        <span id="pause-indicator">{% if is_paused %}<em>(пауза)</em>{% endif %}</span>
     </p>
 
-    <script>
-        let elapsed = {{ elapsed_seconds|default:0 }};
-        const paused = {{ is_paused|yesno:'true,false' }}, timerElement = document.getElementById('game-timer');
-        function secondsToHMS(d) {
-            d = Number(d);
-            const h = Math.floor(d / 3600);
-            const m = Math.floor((d % 3600) / 60);
-            const s = Math.floor(d % 60);
-            return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
-        }
-        function updateTimer() {
-            timerElement.innerText = secondsToHMS(elapsed);
-            if (!paused) elapsed++;
-        }
-        setInterval(updateTimer, 1000);
-        updateTimer();
+    <script type="module">
+        import { initGameTimer } from "{% static 'js/timer.js' %}";
+        window.timer = initGameTimer({{ elapsed_seconds|default:0 }}, "{{ is_paused|yesno:'true,false' }}");
     </script>
 
     <!-- Ваши ресурсы -->
     {% if not player.is_observer %}
     <div id="player-info" style="text-align: center; margin-top: 20px;">
         <p><strong>Ваши ресурсы:</strong></p>
-        <p>Деньги: <span id="player-money">{{ player.money }}</span> ₽</p>
+        <p>Деньги: <span id="player-money">{{ player.money }}</span> 💰</p>
         <p>Влияние: <span id="player-influence">{{ player.influence }} ⭐</span></p>
         <p>Роль: <span id="player-role">{{ player.get_role_display }}</span></p>
         <button onclick="document.getElementById('transfer-form').style.display='block'" style="margin-top: 15px; padding: 10px 60px; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">Перевести</button>
 
-        <form id="transfer-form" action="{% url 'transfer_money' game.id %}" method="post" style="display:none; margin-top: 10px;">
+        <form id="transfer-form" style="display:none; margin-top: 10px;">
             {% csrf_token %}
-            <select name="receiver" required>
+            <select id="receiver" name="receiver" required>
                 {% for gp in players %}
                     {% if gp.user != request.user and not gp.is_observer %}
                         <option value="{{ gp.id }}">{{ gp.user.username }}</option>
                     {% endif %}
                 {% endfor %}
             </select>
-            <input type="number" name="amount" min="1" placeholder="Сумма" required style="width: 100px;">
+            <input type="number" id="amount" name="amount" min="1" placeholder="Сумма" required style="width: 100px;">
             <button type="submit" style="padding: 4px 12px;">OK</button>
         </form>
     </div>
@@ -103,7 +88,7 @@
 
     {% if election_due %}
     <div style="text-align: center; margin-top: 10px;">
-        <a href="{% url 'reelect_state' game.id %}">Переизбрать Политика</a>
+        <a href="#" id="reelect-button">Переизбрать Политика</a>
     </div>
     {% endif %}
 
@@ -116,8 +101,8 @@
                 <div>
                     <strong>Имя:</strong> {{ gp.user.username }}<br>
                     <strong>Роль:</strong> {{ gp.get_role_display }}<br>
-                    <strong>Деньги:</strong> {{ gp.money }} ₽<br>
-                    <strong>Влияние:</strong> {{ gp.influence }} ⭐
+                    <strong>Деньги:</strong> {{ gp.money }} 💰<br>
+                    <strong>Влияние:</strong> {{ gp.influence }} ⭐<br>
                 </div>
             </div>
             {% endif %}
@@ -125,22 +110,39 @@
     </div>
 </div>
 
-<script>
-const gameId = "{{ game.id }}";
-const socket = new WebSocket(`ws://${window.location.host}/ws/game/${gameId}/`);
+<script type="module">
+    import { initWebSocket } from "{% static 'js/game-websocket.js' %}";
+    initWebSocket("{{ game.id }}", "{{ request.user.username }}");
 
-socket.onmessage = function(e) {
-    const data = JSON.parse(e.data);
-    if (data.type === "game_update" && data.data === "refresh") {
-    location.reload();
-    }
-    if (data.type === 'update') {
-        const update = data.data;
-        if (update.money !== undefined) document.getElementById('player-money').textContent = update.money;
-        if (update.influence !== undefined) document.getElementById('player-influence').textContent = update.influence;
-        if (update.role !== undefined) document.getElementById('player-role').textContent = update.role;
-        if (update.players_html !== undefined) document.getElementById('players-list').innerHTML = update.players_html;
-    }
-};
 </script>
+
+<script type="module">
+    import {
+        submitTransfer,
+        togglePause,
+        toggleMode,
+        deleteGame,
+        leaveGame,
+        submitSettings
+    } from "{% static 'js/game-actions.js' %}";
+
+    document.addEventListener("DOMContentLoaded", () => {
+        if (!window.isObserver) {
+            submitTransfer(window.gameId, window.csrfToken);
+            submitSettings(window.gameId, window.csrfToken);
+        }
+
+        window.togglePause = () => togglePause(window.gameId, window.csrfToken);
+        window.toggleMode = () => toggleMode(window.gameId, window.csrfToken);
+        window.deleteGame = () => deleteGame(window.gameId, window.csrfToken, "{% url 'create_game' %}");
+        window.leaveGame = () => leaveGame(window.gameId, window.csrfToken, "{% url 'game_list' %}");
+    });
+</script>
+
+<script type="module">
+    import { showMessage } from "{% static 'js/ui-utils.js' %}";
+
+    window.showMessage = showMessage;
+</script>
+
 {% endblock %}

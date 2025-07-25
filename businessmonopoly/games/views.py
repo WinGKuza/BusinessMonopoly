@@ -20,19 +20,66 @@ def save_game(request, game_id):
     game = get_object_or_404(Game, id=game_id, creator=request.user)
     game.is_active = True
     game.save()
-    return JsonResponse({'status': 'saved'})
+
+    send_game_update(game.id)
+    return JsonResponse({'status': 'ok'})
 
 
-# === Helper to send updates to all clients ===
+def send_personal_message(user_id, message: str, level: str = "info"):
+    level = level.lower()
+    if level not in {"info", "success", "warning", "error"}:
+        level = "info"
+    try:
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"user_{user_id}",
+            {
+                "type": "personal_message",
+                "message": message,
+                "level": level,
+            }
+        )
+    except Exception as e:
+        print(f"[WebSocket] Ошибка отправки личного сообщения: {e}")
+
+
 def send_game_update(game_id):
+    from .models import Game, GamePlayer
+    from asgiref.sync import async_to_sync
+    from channels.layers import get_channel_layer
+
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        f'game_{game_id}',
-        {
-            'type': 'game_update',
-            'data': 'refresh',  # clients will interpret as "reload data"
-        }
-    )
+    game = Game.objects.get(id=game_id)
+    players = GamePlayer.objects.filter(game=game).select_related("user").filter(is_active=True)
+
+    data = {
+        "players": [
+            {
+                "id": p.id,
+                "username": p.user.username,
+                "money": p.money,
+                "influence": p.influence,
+                "role": p.get_role_display(),
+                "is_observer": p.is_observer,
+                "is_active": p.is_active,
+            }
+            for p in players
+        ],
+        "is_voting": game.is_voting,
+        "election_duration": int(game.election_duration.total_seconds()),
+        "paused": game.is_paused(),
+    }
+    try:
+        async_to_sync(channel_layer.group_send)(
+            f"game_{game_id}",
+            {
+                "type": "game_update",
+                "data": data,
+            }
+        )
+    except Exception as e:
+        print(f"[WebSocket] Ошибка при обновлении данных: {e}")
+
 
 def _update_pause_state(game):
     if not game.is_paused():
@@ -64,8 +111,9 @@ def toggle_pause(request, game_id):
     else:
         game.pause()
 
-    send_game_update(game.id)  # Обновит состояние у всех клиентов
-    return redirect('game_detail', game_id=game.id)
+    send_game_update(game.id)
+    return JsonResponse({'status': 'ok'})
+
 
 
 def pause_protected(view_func):
@@ -75,11 +123,8 @@ def pause_protected(view_func):
         if game.is_paused():
             if request.headers.get('x-requested-with') == 'XMLHttpRequest':
                 return JsonResponse({'error': 'Игра на паузе'}, status=403)
-            else:
-                from django.contrib import messages
-                messages.warning(request, "Игра на паузе. Действия временно недоступны.")
-                from django.shortcuts import redirect
-                return redirect('game_detail', game_id=game.id)
+            messages.warning(request, "Игра на паузе. Действия временно недоступны.")
+            return redirect('game_detail', game_id=game.id)
         return view_func(request, game_id, *args, **kwargs)
     return _wrapped_view
 
@@ -89,12 +134,19 @@ def pause_protected(view_func):
 def update_game_settings(request, game_id):
     game = get_object_or_404(Game, id=game_id, creator=request.user)
     form = GameSettingsForm(request.POST, instance=game)
+
     if form.is_valid():
         form.save()
         send_game_update(game.id)
+
+        if request.headers.get("x-requested-with") == "XMLHttpRequest":
+            return JsonResponse({'status': 'ok'})
         messages.success(request, "Настройки игры обновлены.")
     else:
+        if request.headers.get("x-requested-with") == "XMLHttpRequest":
+            return JsonResponse({'error': 'Ошибка при сохранении настроек'}, status=400)
         messages.error(request, "Ошибка при сохранении настроек.")
+
     return redirect('game_detail', game_id=game.id)
 
 
@@ -104,33 +156,59 @@ def update_game_settings(request, game_id):
 def transfer_money(request, game_id):
     game = get_object_or_404(Game, id=game_id)
     sender = get_object_or_404(GamePlayer, game=game, user=request.user)
+    if sender.is_observer:
+        return JsonResponse({'status': 'error', 'error': 'Наблюдатель не может переводить деньги'})
 
-    receiver_id = request.POST.get('receiver')
-    amount = int(request.POST.get('amount', 0))
+    try:
+        receiver_id = int(request.POST.get("receiver_id"))
+        amount = int(request.POST.get("amount"))
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Неверные данные"}, status=400)
 
     if amount <= 0:
-        messages.error(request, 'Сумма должна быть положительной.')
-        return redirect('game_detail', game_id=game_id)
+        return JsonResponse({"error": "Сумма должна быть положительной"}, status=400)
+
+    if sender.id == receiver_id:
+        return JsonResponse({"error": "Нельзя перевести деньги самому себе"}, status=400)
 
     try:
         receiver = GamePlayer.objects.get(id=receiver_id, game=game)
     except GamePlayer.DoesNotExist:
-        messages.error(request, 'Получатель не найден.')
-        return redirect('game_detail', game_id=game_id)
+        return JsonResponse({"error": "Получатель не найден"}, status=400)
+
+    if receiver.is_observer:
+        return JsonResponse({"status": "error", "error": "Нельзя переводить наблюдателю"})
 
     if sender.money < amount:
-        messages.error(request, 'Недостаточно средств.')
-        return redirect('game_detail', game_id=game_id)
+        return JsonResponse({"error": "Недостаточно средств"}, status=400)
 
     with transaction.atomic():
+        sender = GamePlayer.objects.select_for_update().get(id=sender.id)
+        receiver = GamePlayer.objects.select_for_update().get(id=receiver.id)
+
         sender.money -= amount
         receiver.money += amount
         sender.save()
         receiver.save()
 
     send_game_update(game.id)
-    messages.success(request, f'Переведено {amount} ₽ игроку {receiver.user.username}.')
-    return redirect('game_detail', game_id=game_id)
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"user_{sender.user.id}",
+        {
+            "type": "personal_message",
+            "message": f"Вы перевели {amount} ₽ игроку {receiver.user.username}."
+        }
+    )
+
+    async_to_sync(channel_layer.group_send)(
+        f"user_{receiver.user.id}",
+        {
+            "type": "personal_message",
+            "message": f"Вы получили {amount} ₽ от игрока {sender.user.username}."
+        }
+    )
+    return JsonResponse({'status': 'ok'})
 
 
 
@@ -139,10 +217,11 @@ def toggle_mode(request, game_id):
     game = get_object_or_404(Game, id=game_id, creator=request.user)
     player = get_object_or_404(GamePlayer, game=game, user=request.user)
     player.is_observer = not player.is_observer
+    player.is_active = True
     player.save()
     send_game_update(game.id)
-    _update_pause_state(game)
-    return redirect('game_detail', game_id=game.id)
+    #_update_pause_state(game)
+    return JsonResponse({"status": "ok", "is_observer": player.is_observer})
 
 
 @login_required
@@ -152,12 +231,12 @@ def reelect_state_official(request, game_id):
 
     if not game.election_due():
         messages.warning(request, 'Переизбрание возможно раз в 1.5 часа.')
-        return redirect('game_detail', game_id=game.id)
+        return JsonResponse({'status': 'ok'})
 
     players = GamePlayer.objects.filter(game=game, is_active=True)
     if not players:
         messages.error(request, 'Нет игроков для голосования.')
-        return redirect('game_detail', game_id=game.id)
+        return JsonResponse({'status': 'ok'})
 
     new_official = max(players, key=lambda p: p.influence)
 
@@ -178,7 +257,7 @@ def reelect_state_official(request, game_id):
 
     send_game_update(game.id)
     messages.success(request, f'Новый государственный деятель: {new_official.user.username}')
-    return redirect('game_detail', game_id=game.id)
+    return JsonResponse({'status': 'ok'})
 
 
 @login_required
@@ -187,7 +266,7 @@ def appoint_banker(request, game_id, player_id):
     game = get_object_or_404(Game, id=game_id)
     if game.state_official != request.user.playerprofile:
         messages.error(request, 'Только гос. деятель может назначать банкира.')
-        return redirect('game_detail', game_id=game_id)
+        return JsonResponse({'status': 'ok'})
 
     target_gp = get_object_or_404(GamePlayer, id=player_id, game=game)
     target_gp.role = 4
@@ -195,23 +274,30 @@ def appoint_banker(request, game_id, player_id):
 
     send_game_update(game.id)
     messages.success(request, f'{target_gp.user.username} назначен банкиром.')
-    return redirect('game_detail', game_id=game.id)
-
+    return JsonResponse({'status': 'ok'})
 
 @login_required
-@require_POST
 def delete_game(request, game_id):
     game = get_object_or_404(Game, id=game_id)
-    if request.user == game.creator:
-        game.delete()
-        return redirect('create_game')
-    return redirect('game_detail', game_id=game_id)
+
+    if request.user != game.creator:
+        if request.headers.get("x-requested-with") == "XMLHttpRequest":
+            return JsonResponse({'error': 'Недостаточно прав'}, status=403)
+        return redirect('game_detail', game_id=game_id)
+
+    game.delete()
+
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse({'status': 'deleted'})
+    return redirect('create_game')
 
 
 @login_required
 def create_game(request):
     active_game = Game.objects.filter(creator=request.user, is_active=True).first()
     if active_game:
+        if request.headers.get("x-requested-with") == "XMLHttpRequest":
+            return JsonResponse({'redirect': f'/games/{active_game.id}/join/'})
         messages.warning(request, 'У вас уже есть созданная игра. Вы перенаправлены к ней.')
         return redirect('join_game', game_id=active_game.id)
 
@@ -222,9 +308,12 @@ def create_game(request):
             game.creator = request.user
             game.is_active = True
             game.save()
+            if request.headers.get("x-requested-with") == "XMLHttpRequest":
+                return JsonResponse({'redirect': f'/games/{game.id}/join/'})
             return redirect('join_game', game_id=game.id)
     else:
         form = GameCreateForm()
+
     return render(request, 'games/create_game.html', {'form': form})
 
 
@@ -235,15 +324,18 @@ def join_game(request, game_id):
     game_player, created = GamePlayer.objects.get_or_create(game=game, user=request.user)
 
     if created:
-        # игрок только что создан → назначаем стартовую роль и ресурсы
         assign_initial_role_and_resources(game_player)
     else:
-        # игрок уже был, возможно выходил → просто активируем
         game_player.is_active = True
         game_player.save()
 
-    _update_pause_state(game)
+    #_update_pause_state(game)
+    send_game_update(game.id)
+
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse({'status': 'joined'})
     return redirect('game_detail', game_id=game.id)
+
 
 
 
@@ -258,7 +350,12 @@ def leave_game(request, game_id):
         player.save()
     except GamePlayer.DoesNotExist:
         pass
-    _update_pause_state(game)
+
+    #_update_pause_state(game)
+    send_game_update(game.id)
+
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse({'status': 'left'})
     return redirect('game_list')
 
 
@@ -283,26 +380,37 @@ def game_detail(request, game_id):
 
 @login_required
 def game_list(request):
-    games = Game.objects.filter(is_active=True)
+    games = Game.objects.filter(is_active=True).values('id', 'name', 'creator__username', 'created_at')
+
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse({'games': list(games)})
+
     return render(request, 'games/game_list.html', {'games': games})
 
 
 @login_required
 def home(request):
     error = None
+
     if request.method == 'POST':
         if 'create_game' in request.POST:
             form = GameCreateForm(request.POST)
             if form.is_valid():
                 game = form.save()
+                if request.headers.get("x-requested-with") == "XMLHttpRequest":
+                    return JsonResponse({'redirect': f'/games/{game.id}/'})
                 return redirect('game_detail', game_id=game.id)
+
         elif 'join_game' in request.POST:
             game_id = request.POST.get('game_id')
             try:
                 game = Game.objects.get(id=game_id)
+                if request.headers.get("x-requested-with") == "XMLHttpRequest":
+                    return JsonResponse({'redirect': f'/games/{game.id}/'})
                 return redirect('game_detail', game_id=game.id)
             except Game.DoesNotExist:
                 error = "Игра с таким ID не найдена."
+
     else:
         form = GameCreateForm()
 
