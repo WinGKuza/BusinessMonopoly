@@ -124,3 +124,22 @@ export function submitSettings(gameId, csrfToken) {
         });
     }
 }
+
+
+export function upgradeRole(gameId, csrfToken) {
+    const upgradeBtn = document.getElementById("upgrade-role-button");
+    if (upgradeBtn) {
+        upgradeBtn.addEventListener("click", () => {
+            const confirmUpgrade = confirm("Вы точно хотите улучшить свою роль?");
+            if (!confirmUpgrade) return;
+
+            fetch(`/games/${gameId}/upgrade_role/`, {
+                method: "POST",
+                headers: {
+                    "X-CSRFToken": csrfToken,
+                    "X-Requested-With": "XMLHttpRequest"
+                }
+            });
+        });
+    }
+}

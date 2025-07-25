@@ -2,7 +2,7 @@ import random
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
@@ -60,6 +60,7 @@ def send_game_update(game_id):
                 "money": p.money,
                 "influence": p.influence,
                 "role": p.get_role_display(),
+                "special_role": p.special_role,
                 "is_observer": p.is_observer,
                 "is_active": p.is_active,
             }
@@ -99,6 +100,55 @@ def assign_initial_role_and_resources(game_player):
     game_player.save()
 
 
+@require_POST
+@login_required
+def upgrade_role(request, game_id):
+    game = get_object_or_404(Game, id=game_id)
+    player = get_object_or_404(GamePlayer, game=game, user=request.user)
+
+    if player.special_role != 0:
+        return JsonResponse({'error': 'Вы не можете улучшать специальную роль'}, status=400)
+
+    if player.role == 1:
+        if player.money >= 500:
+            player.money -= 500
+        elif player.influence >= 3:
+            player.influence -= 3
+        else:
+            send_personal_message(
+                request.user.id,
+                "Недостаточно средств для улучшения.",
+                "error"
+            )
+            return HttpResponse(status=204)
+        player.role = 2
+    elif player.role == 2:
+        if player.money >= 1000:
+            player.money -= 1000
+        elif player.influence >= 6:
+            player.influence -= 6
+        else:
+            send_personal_message(
+                request.user.id,
+                "Недостаточно средств для улучшения.",
+                "error"
+            )
+            return HttpResponse(status=204)
+        player.role = 3
+    else:
+        send_personal_message(
+            request.user.id,
+            "Нельзя улучшить эту роль.",
+            "error"
+        )
+        return HttpResponse(status=204)
+
+    player.save()
+    send_game_update(game.id)
+    send_personal_message(player.user.id, "Роль успешно улучшена!", "success")
+    return JsonResponse({'status': 'ok'})
+
+
 @login_required
 @require_POST
 def toggle_pause(request, game_id):
@@ -121,9 +171,14 @@ def pause_protected(view_func):
     def _wrapped_view(request, game_id, *args, **kwargs):
         game = get_object_or_404(Game, id=game_id)
         if game.is_paused():
+            send_personal_message(
+                request.user.id,
+                "Игра на паузе. Действия временно недоступны.",
+                "warning"
+            )
+
             if request.headers.get('x-requested-with') == 'XMLHttpRequest':
-                return JsonResponse({'error': 'Игра на паузе'}, status=403)
-            messages.warning(request, "Игра на паузе. Действия временно недоступны.")
+                return HttpResponse(status=204)
             return redirect('game_detail', game_id=game.id)
         return view_func(request, game_id, *args, **kwargs)
     return _wrapped_view
@@ -138,14 +193,21 @@ def update_game_settings(request, game_id):
     if form.is_valid():
         form.save()
         send_game_update(game.id)
-
+        send_personal_message(
+            request.user.id,
+            "Настройки игры обновлены.",
+            "success"
+        )
         if request.headers.get("x-requested-with") == "XMLHttpRequest":
             return JsonResponse({'status': 'ok'})
-        messages.success(request, "Настройки игры обновлены.")
     else:
+        send_personal_message(
+            request.user.id,
+            "Ошибка при сохранении настроек.",
+            "error"
+        )
         if request.headers.get("x-requested-with") == "XMLHttpRequest":
             return JsonResponse({'error': 'Ошибка при сохранении настроек'}, status=400)
-        messages.error(request, "Ошибка при сохранении настроек.")
 
     return redirect('game_detail', game_id=game.id)
 
@@ -192,21 +254,17 @@ def transfer_money(request, game_id):
         receiver.save()
 
     send_game_update(game.id)
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        f"user_{sender.user.id}",
-        {
-            "type": "personal_message",
-            "message": f"Вы перевели {amount} ₽ игроку {receiver.user.username}."
-        }
+
+    send_personal_message(
+        sender.user.id,
+        f"Вы перевели {amount} ₽ игроку {receiver.user.username}.",
+        "success"
     )
 
-    async_to_sync(channel_layer.group_send)(
-        f"user_{receiver.user.id}",
-        {
-            "type": "personal_message",
-            "message": f"Вы получили {amount} ₽ от игрока {sender.user.username}."
-        }
+    send_personal_message(
+        receiver.user.id,
+        f"Вы получили {amount} ₽ от игрока {sender.user.username}.",
+        "success"
     )
     return JsonResponse({'status': 'ok'})
 
@@ -298,6 +356,7 @@ def create_game(request):
     if active_game:
         if request.headers.get("x-requested-with") == "XMLHttpRequest":
             return JsonResponse({'redirect': f'/games/{active_game.id}/join/'})
+
         messages.warning(request, 'У вас уже есть созданная игра. Вы перенаправлены к ней.')
         return redirect('join_game', game_id=active_game.id)
 

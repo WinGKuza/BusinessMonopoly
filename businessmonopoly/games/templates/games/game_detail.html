@@ -3,7 +3,7 @@
 {% block content %}
 
 <!-- Блок для сообщений -->
-<div id="message-box" style="display: none; padding: 15px 20px; margin: 20px auto; max-width: 800px; border-radius: 6px; text-align: center; font-size: 18px; font-weight: 500; box-shadow: 0 2px 6px rgba(0,0,0,0.1); transition: opacity 0.3s ease; opacity: 1;"></div>
+<div id="message-container" style="position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; max-width: 600px; width: 100%;"></div>
 
 <script>
     window.gameId = "{{ game.id }}";
@@ -14,7 +14,24 @@
 <div style="max-width: 800px; margin: auto; padding: 20px; background-color: #f8f9fa; border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,0.1); position: relative;">
     <h2 style="text-align: center;">{{ game.name }}</h2>
 
-    <!-- Шестерёнка + Выход -->
+    <!-- Шестерёнка + Выход + Улучшение роли-->
+    {% if player.special_role == 0 and player.role < 3 %}
+    <div style="position: absolute; top: 20px; left: 20px;">
+        <button id="upgrade-role-button"
+                title="Улучшить роль"
+                style="background-color: #2f71f5;
+                       color: white;
+                       padding: 10px 20px;
+                       border: none;
+                       border-radius: 6px;
+                       font-size: 14px;
+                       font-weight: 500;
+                       cursor: pointer;
+                       box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+            ⬆️ Улучшить роль
+        </button>
+    </div>
+    {% endif %}
     <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 12px; align-items: center;">
         {% if user == game.creator %}
         <div style="position: relative; display: inline-block;">
@@ -123,13 +140,15 @@
         toggleMode,
         deleteGame,
         leaveGame,
-        submitSettings
+        submitSettings,
+        upgradeRole
     } from "{% static 'js/game-actions.js' %}";
 
     document.addEventListener("DOMContentLoaded", () => {
         if (!window.isObserver) {
             submitTransfer(window.gameId, window.csrfToken);
             submitSettings(window.gameId, window.csrfToken);
+            upgradeRole(window.gameId, window.csrfToken);
         }
 
         window.togglePause = () => togglePause(window.gameId, window.csrfToken);

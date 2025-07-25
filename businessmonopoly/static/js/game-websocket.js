@@ -5,46 +5,8 @@ export function initWebSocket(gameId, currentUsername) {
     socket.onmessage = async function (e) {
         const data = JSON.parse(e.data);
         if (data.type === "personal") {
-            const box = document.getElementById("message-box");
-            if (box) {
-                const level = data.level || "info";
-                const styles = {
-                    info: {
-                        bg: "#e7f5ff",
-                        color: "#084298",
-                        border: "1px solid #b6d4fe",
-                    },
-                    success: {
-                        bg: "#d1e7dd",
-                        color: "#0f5132",
-                        border: "1px solid #badbcc",
-                    },
-                    warning: {
-                        bg: "#fff3cd",
-                        color: "#664d03",
-                        border: "1px solid #ffecb5",
-                    },
-                    error: {
-                        bg: "#f8d7da",
-                        color: "#842029",
-                        border: "1px solid #f5c2c7",
-                    }
-                };
-                const style = styles[level] || styles.info;
-
-                box.textContent = data.message;
-                box.style.backgroundColor = style.bg;
-                box.style.color = style.color;
-                box.style.border = style.border;
-                box.style.opacity = "1";
-                box.style.display = "block";
-
-                setTimeout(() => {
-                    box.style.display = "none";
-                }, 4000);
-            }
-
-            return;
+                showMessage(data.message, data.level || "info");
+                return;
         }
 
         if (data.type === "update") {

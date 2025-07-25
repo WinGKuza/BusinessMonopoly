@@ -11,11 +11,12 @@ urlpatterns = [
     path('<uuid:game_id>/delete/', views.delete_game, name='delete_game'),
     path('<uuid:game_id>/toggle_mode/', views.toggle_mode, name='toggle_mode'),
     path('<uuid:game_id>/reelect/', views.reelect_state_official, name='reelect_state'),
-    path('<uuid:game_id>/settings/', views.update_game_settings, name='update_game_settings'),
+    path('<uuid:game_id>/update_settings/', views.update_game_settings, name='update_game_settings'),
     path('<uuid:game_id>/appoint_banker/<int:player_id>/', views.appoint_banker, name='appoint_banker'),
     path('<uuid:game_id>/join/', views.join_game, name='join_game'),
     path('<uuid:game_id>/leave/', views.leave_game, name='leave_game'),
     path('<uuid:game_id>/transfer/', views.transfer_money, name='transfer_money'),
     path('<uuid:game_id>/toggle_pause/', views.toggle_pause, name='toggle_pause'),
+    path('<uuid:game_id>/upgrade_role/', views.upgrade_role, name='upgrade_role'),
 ]
 
