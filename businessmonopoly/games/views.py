@@ -25,19 +25,28 @@ def save_game(request, game_id):
     return JsonResponse({'status': 'ok'})
 
 
-def send_personal_message(user_id, message: str, level: str = "info"):
+def send_personal_message(user_id, message: str, level: str = "info", extra_data=None):
     level = level.lower()
     if level not in {"info", "success", "warning", "error"}:
         level = "info"
+
+    payload = {
+        "type": "personal_message",
+        "message": {
+            "type": "personal",
+            "message": message,
+            "level": level,
+        }
+    }
+
+    if extra_data:
+        payload["message"]["data"] = extra_data
+
     try:
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
             f"user_{user_id}",
-            {
-                "type": "personal_message",
-                "message": message,
-                "level": level,
-            }
+            payload
         )
     except Exception as e:
         print(f"[WebSocket] Ошибка отправки личного сообщения: {e}")
@@ -145,7 +154,16 @@ def upgrade_role(request, game_id):
 
     player.save()
     send_game_update(game.id)
-    send_personal_message(player.user.id, "Роль успешно улучшена!", "success")
+    send_personal_message(
+        player.user.id,
+        "Роль успешно улучшена!",
+        "success",
+        extra_data={
+            "role_id": player.role,
+            "role": player.get_role_display(),
+            "special_role": player.special_role,
+        }
+    )
     return JsonResponse({'status': 'ok'})
 
 

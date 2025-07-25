@@ -5,8 +5,30 @@ export function initWebSocket(gameId, currentUsername) {
     socket.onmessage = async function (e) {
         const data = JSON.parse(e.data);
         if (data.type === "personal") {
-                showMessage(data.message, data.level || "info");
-                return;
+            const msg = data.message;
+
+            if (typeof msg === "string") {
+                showMessage(msg, "info");
+            } else {
+                showMessage(msg.message, msg.level || "info");
+
+                if (msg.data && msg.data.role_id !== undefined && msg.data.special_role !== undefined) {
+                    const upgradeBtn = document.getElementById("upgrade-role-button");
+                    if (upgradeBtn) {
+                        if (msg.data.special_role === 0 && msg.data.role_id < 3) {
+                            upgradeBtn.style.display = "inline-block";
+                        } else {
+                            upgradeBtn.style.display = "none";
+                        }
+                    }
+
+                    if (msg.data.role) {
+                        document.getElementById("player-role").textContent = msg.data.role;
+                    }
+                }
+            }
+
+            return;
         }
 
         if (data.type === "update") {
