@@ -15,23 +15,6 @@
     <h2 style="text-align: center;">{{ game.name }}</h2>
 
     <!-- Шестерёнка + Выход + Улучшение роли-->
-    {% if player.special_role == 0 and player.role < 3 %}
-    <div style="position: absolute; top: 20px; left: 20px;">
-        <button id="upgrade-role-button"
-                title="Улучшить роль"
-                style="background-color: #2f71f5;
-                       color: white;
-                       padding: 10px 20px;
-                       border: none;
-                       border-radius: 6px;
-                       font-size: 14px;
-                       font-weight: 500;
-                       cursor: pointer;
-                       box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
-            ⬆️ Улучшить роль
-        </button>
-    </div>
-    {% endif %}
     <div style="position: absolute; top: 20px; right: 20px; display: flex; gap: 12px; align-items: center;">
         {% if user == game.creator %}
         <div style="position: relative; display: inline-block;">
@@ -80,14 +63,25 @@
     </script>
 
     <!-- Ваши ресурсы -->
-    {% if not player.is_observer %}
-    <div id="player-info" style="text-align: center; margin-top: 20px;">
+    <!--{% if not player.is_observer %}-->
+    <div id="player-info" style="text-align: center; margin-top: 20px; {% if player.is_observer %}display:none;{% endif %}">
         <p><strong>Ваши ресурсы:</strong></p>
         <p>Деньги: <span id="player-money">{{ player.money }}</span> 💰</p>
         <p>Влияние: <span id="player-influence">{{ player.influence }} ⭐</span></p>
         <p>Роль: <span id="player-role">{{ player.get_role_display }}</span></p>
-        <button onclick="document.getElementById('transfer-form').style.display='block'" style="margin-top: 15px; padding: 10px 60px; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">Перевести</button>
+        <div style="display: flex; gap: 10px; margin-top: 15px;">
+            <button onclick="document.getElementById('transfer-form').style.display='block'"
+                style="flex: 1; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                Перевести
+            </button>
 
+            {% if player.special_role == 0 and player.role < 3 %}
+            <button id="upgrade-role-button"
+                style="flex: 1; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                ⬆️ Улучшить роль
+            </button>
+            {% endif %}
+        </div>
         <form id="transfer-form" style="display:none; margin-top: 10px;">
             {% csrf_token %}
             <select id="receiver" name="receiver" required>
@@ -101,7 +95,7 @@
             <button type="submit" style="padding: 4px 12px;">OK</button>
         </form>
     </div>
-    {% endif %}
+    <!--{% endif %}-->
 
     {% if election_due %}
     <div style="text-align: center; margin-top: 10px;">

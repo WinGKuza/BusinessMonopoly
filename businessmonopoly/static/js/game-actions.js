@@ -49,8 +49,7 @@ export function toggleMode(gameId, csrfToken) {
     .then(res => res.json())
     .then(data => {
         if (data.status === "ok") {
-            window.isObserver = data.is_observ
-            Вer;
+            window.isObserver = data.is_observer;
             updateUIForMode(data.is_observer);
         } else {
             alert("Ошибка при переключении режима");
