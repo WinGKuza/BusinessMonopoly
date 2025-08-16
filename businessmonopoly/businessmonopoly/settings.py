@@ -153,6 +153,20 @@ USE_I18N = True
 
 USE_TZ = True
 
+# Celery broker / result
+CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/1"
+CELERY_TIMEZONE = "Europe/Moscow"
+CELERY_ENABLE_UTC = True
+
+# Периодичка (каждые 5 сек, можно 2–10)
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    "check-and-finish-elections": {
+        "task": "games.tasks.check_and_finish_elections",
+        "schedule": 5.0,  # seconds
+    },
+}
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
@@ -164,3 +178,4 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+

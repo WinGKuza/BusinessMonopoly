@@ -63,7 +63,6 @@
     </script>
 
     <!-- Ваши ресурсы -->
-    <!--{% if not player.is_observer %}-->
     <div id="player-info" style="text-align: center; margin-top: 20px; {% if player.is_observer %}display:none;{% endif %}">
         <p><strong>Ваши ресурсы:</strong></p>
         <p>Деньги: <span id="player-money">{{ player.money }}</span> 💰</p>
@@ -95,13 +94,13 @@
             <button type="submit" style="padding: 4px 12px;">OK</button>
         </form>
     </div>
-    <!--{% endif %}-->
 
-    {% if election_due %}
-    <div style="text-align: center; margin-top: 10px;">
-        <a href="#" id="reelect-button">Переизбрать Политика</a>
+    <div id="election-block" style="display:none; margin-top: 15px;">
+        <button id="reelect-button"
+            style="flex: 1; width: 100%; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
+            🔄 Переизбрать Политика
+        </button>
     </div>
-    {% endif %}
 
     <!-- Список участников -->
     <h3 style="text-align: center; margin-top: 20px;">Участники</h3>

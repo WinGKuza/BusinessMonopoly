@@ -76,8 +76,8 @@ def send_game_update(game_id):
             for p in players
         ],
         "is_voting": game.is_voting,
-        "election_duration": int(game.election_duration.total_seconds()),
         "paused": game.is_paused(),
+        "election_remaining": game.election_remaining_seconds() if game.is_voting else 0,
     }
     try:
         async_to_sync(channel_layer.group_send)(
@@ -109,8 +109,43 @@ def assign_initial_role_and_resources(game_player):
     game_player.save()
 
 
+def pause_protected(view_func):
+    @wraps(view_func)
+    def _wrapped_view(request, game_id, *args, **kwargs):
+        game = get_object_or_404(Game, id=game_id)
+        if game.is_paused():
+            send_personal_message(
+                request.user.id,
+                "Игра на паузе. Действия временно недоступны.",
+                "warning"
+            )
+
+            if request.headers.get('x-requested-with') == 'XMLHttpRequest':
+                return HttpResponse(status=204)
+            return redirect('game_detail', game_id=game.id)
+        return view_func(request, game_id, *args, **kwargs)
+    return _wrapped_view
+
+
+@login_required
+@require_POST
+def toggle_pause(request, game_id):
+    game = get_object_or_404(Game, id=game_id)
+    if request.user != game.creator:
+        return JsonResponse({'error': 'Forbidden'}, status=403)
+
+    if game.is_paused():
+        game.resume()
+    else:
+        game.pause()
+
+    send_game_update(game.id)
+    return JsonResponse({'status': 'ok'})
+
+
 @require_POST
 @login_required
+@pause_protected
 def upgrade_role(request, game_id):
     game = get_object_or_404(Game, id=game_id)
     player = get_object_or_404(GamePlayer, game=game, user=request.user)
@@ -165,41 +200,6 @@ def upgrade_role(request, game_id):
         }
     )
     return JsonResponse({'status': 'ok'})
-
-
-@login_required
-@require_POST
-def toggle_pause(request, game_id):
-    game = get_object_or_404(Game, id=game_id)
-    if request.user != game.creator:
-        return JsonResponse({'error': 'Forbidden'}, status=403)
-
-    if game.is_paused():
-        game.resume()
-    else:
-        game.pause()
-
-    send_game_update(game.id)
-    return JsonResponse({'status': 'ok'})
-
-
-
-def pause_protected(view_func):
-    @wraps(view_func)
-    def _wrapped_view(request, game_id, *args, **kwargs):
-        game = get_object_or_404(Game, id=game_id)
-        if game.is_paused():
-            send_personal_message(
-                request.user.id,
-                "Игра на паузе. Действия временно недоступны.",
-                "warning"
-            )
-
-            if request.headers.get('x-requested-with') == 'XMLHttpRequest':
-                return HttpResponse(status=204)
-            return redirect('game_detail', game_id=game.id)
-        return view_func(request, game_id, *args, **kwargs)
-    return _wrapped_view
 
 
 @login_required
@@ -449,7 +449,6 @@ def game_detail(request, game_id):
         'players': players,
         'player': player,
         'elapsed_seconds': game.elapsed_seconds(),
-        'election_due': game.election_due(),
         'is_paused': game.is_paused(),
         'settings_form': settings_form,
     })

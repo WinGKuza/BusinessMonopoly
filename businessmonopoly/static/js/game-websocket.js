@@ -46,6 +46,10 @@ export function initWebSocket(gameId, currentUsername) {
                 document.getElementById('player-role').textContent = update.role;
             }
 
+            if (typeof update.elapsed_seconds === "number" && window.timer && typeof window.timer.setElapsed === "function") {
+                window.timer.setElapsed(update.elapsed_seconds);
+            }
+
             if (update.players && Array.isArray(update.players)) {
                 const playerList = document.getElementById("players-list");
                 playerList.innerHTML = "";
@@ -85,11 +89,42 @@ export function initWebSocket(gameId, currentUsername) {
                 });
             }
 
-            const reelectBtn = document.getElementById("reelect-button");
-            if (reelectBtn) reelectBtn.style.display = update.is_voting ? "none" : "inline-block";
+            const electionBlock = document.getElementById("election-block");
+            if (electionBlock) {
+                // показываем, когда идёт голосование
+                const hasRemaining = (typeof update.election_remaining === "number" && update.election_remaining > 0);
+                const shouldShow = !!update.is_voting || hasRemaining;
+                electionBlock.style.display = shouldShow ? "flex" : "none";
+            }
 
-            const votingNotice = document.getElementById("voting-notice");
-            if (votingNotice) votingNotice.style.display = update.is_voting ? "block" : "none";
+            const el = document.getElementById("election-timer");
+            if (el && typeof update.election_remaining !== "undefined") {
+              el.textContent = formatSeconds(update.election_remaining);
+            }
+
+            const messageContainer = document.getElementById("message-container");
+            let votingMsg = document.getElementById("voting-message");
+
+            if (update.is_voting) {
+                if (!votingMsg) {
+                    votingMsg = document.createElement("div");
+                    votingMsg.id = "voting-message";
+                    votingMsg.textContent = "⚠️ Внимание, идёт голосование за нового Политика!";
+                    votingMsg.style.padding = "12px 20px";
+                    votingMsg.style.marginBottom = "10px";
+                    votingMsg.style.borderRadius = "6px";
+                    votingMsg.style.fontSize = "16px";
+                    votingMsg.style.color = "#333";
+                    votingMsg.style.backgroundColor = "#ffc107"; // warning
+                    votingMsg.style.boxShadow = "0 2px 6px rgba(0,0,0,0.2)";
+                    votingMsg.style.textAlign = "center";
+                    messageContainer.appendChild(votingMsg);
+                }
+            } else {
+                if (votingMsg) {
+                    votingMsg.remove();
+                }
+            }
 
             if (update.paused !== undefined) {
                 window.paused = update.paused;
