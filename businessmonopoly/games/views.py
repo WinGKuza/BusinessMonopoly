@@ -6,6 +6,7 @@ from django.http import JsonResponse, HttpResponse
 from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
+from django.urls import reverse
 from functools import wraps
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -361,11 +362,28 @@ def delete_game(request, game_id):
             return JsonResponse({'error': 'Недостаточно прав'}, status=403)
         return redirect('game_detail', game_id=game_id)
 
+    channel_layer = get_channel_layer()
+    game_name = game.name
+    redirect_url = request.build_absolute_uri(reverse('game_list'))
+
+    user_ids = (GamePlayer.objects
+                .filter(game=game)
+                .values_list("user_id", flat=True)
+                .distinct())
+    for uid in user_ids:
+        send_personal_message(uid, f"Игра «{game_name}» была удалена", level="warning")
+
+    async_to_sync(channel_layer.group_send)(
+        f"game_{game_id}",
+        {"type": "game_deleted", "name": game_name, "redirect": redirect_url}
+    )
+
     game.delete()
 
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({'status': 'deleted'})
     return redirect('create_game')
+
 
 
 @login_required

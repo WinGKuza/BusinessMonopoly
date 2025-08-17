@@ -4,6 +4,8 @@ export function initWebSocket(gameId, currentUsername) {
     const socket = new WebSocket(`ws://${window.location.host}/ws/game/${gameId}/`);
     socket.onmessage = async function (e) {
         const data = JSON.parse(e.data);
+
+        // Персональное сообщение
         if (data.type === "personal") {
             const msg = data.message;
 
@@ -31,6 +33,7 @@ export function initWebSocket(gameId, currentUsername) {
             return;
         }
 
+        // Логика для обновлении элементов игры
         if (data.type === "update") {
             const update = data.data;
 
@@ -139,6 +142,17 @@ export function initWebSocket(gameId, currentUsername) {
                 }
             }
 
+        }
+
+        // Логика при удалении игры
+        if (data.type === "game_deleted") {
+            const gameName = data.name || "Название игры";
+            sessionStorage.setItem("flash_message", JSON.stringify({
+                text: `Игра «${gameName}» была удалена`,
+                level: "warning"
+            }));
+            window.location.href = data.redirect || "/games/list/";
+            return;
         }
     };
 }

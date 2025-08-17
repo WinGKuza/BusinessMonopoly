@@ -85,3 +85,10 @@ class GameConsumer(AsyncWebsocketConsumer):
             "message": event["message"],
             "level": event.get("level", "info"),
         }))
+
+    async def game_deleted(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "game_deleted",
+            "name": event.get("name"),
+            "redirect": event.get("redirect"),
+        }))

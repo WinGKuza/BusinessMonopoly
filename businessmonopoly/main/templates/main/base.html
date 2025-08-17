@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="ru">
 <head>
+    {% load static %}
     <meta charset="UTF-8">
     <meta name="viewport"
           content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css">
 </head>
+
 <body>
 
 <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
@@ -53,6 +55,12 @@
   </div>
 </nav>
 
+<!-- Глобальный контейнер для toast-сообщений -->
+<div id="message-container"
+     style="position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 1060; max-width: 600px; width: 100%; pointer-events: none;">
+</div>
+
 {% if messages %}
 <div class="container mt-3">
   {% for message in messages %}
@@ -67,5 +75,24 @@
 {% block content %}{% endblock %}
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/js/bootstrap.bundle.min.js"></script>
+
+
+<!-- Показываем сообщение -->
+<script type="module">
+  import { showMessage } from "{% static 'js/ui-utils.js' %}";
+  window.showMessage = showMessage;
+
+  // Подхватываем флеш после редиректа (имя ключа и функция те же)
+  window.addEventListener("DOMContentLoaded", () => {
+    const flash = sessionStorage.getItem("flash_message");
+    if (flash) {
+      try {
+        const { text, level } = JSON.parse(flash);
+        showMessage(text, level);      // <--- ИМЯ НЕ МЕНЯЕМ
+      } catch (_) {}
+      sessionStorage.removeItem("flash_message");
+    }
+  });
+</script>
 </body>
 </html>
