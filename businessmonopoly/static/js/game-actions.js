@@ -142,3 +142,145 @@ export function upgradeRole(gameId, csrfToken) {
         });
     }
 }
+
+
+export function initElectionUI(currentUsername) {
+    console.debug("[election] initElectionUI start");
+
+    let selectedCandidateId = null;
+
+    function openElectionModal() {
+        const modal = document.getElementById("election-modal");
+        if (modal) modal.style.display = "flex";
+    }
+
+    function closeElectionModal() {
+        const modal = document.getElementById("election-modal");
+        if (modal) modal.style.display = "none";
+        selectedCandidateId = null;
+    }
+
+    function renderElectionList() {
+        const list = document.getElementById("election-list");
+        const empty = document.getElementById("election-empty");
+        if (!list || !empty) return;
+
+        const candidates = (window.voteCandidates || [])
+            .filter(p => p && p.username !== currentUsername);
+
+        list.innerHTML = "";
+        if (!candidates.length) {
+            empty.style.display = "block";
+            return;
+        }
+        empty.style.display = "none";
+
+        candidates.forEach(p => {
+            const item = document.createElement("label");
+            item.style.cssText =
+                "display:flex;align-items:center;gap:10px;padding:10px;border:1px solid #dee2e6;border-radius:8px;cursor:pointer;";
+
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = "candidate";
+            radio.value = p.id;
+            radio.style.margin = 0;
+            radio.addEventListener("change", () => { selectedCandidateId = p.id; });
+
+            const info = document.createElement("div");
+            info.innerHTML = `<strong>${p.username}</strong>`;
+
+            item.appendChild(radio);
+            item.appendChild(info);
+            list.appendChild(item);
+        });
+    }
+
+    // Дадим доступ WS-обработчику
+    window.renderElectionList = renderElectionList;
+
+    // === Пытаемся навесить обработчики СРАЗУ (без DOMContentLoaded) ===
+    bindHandlers();
+    // и на всякий случай повторим на следующем тике (если вдруг элементы дорисуются позже)
+    setTimeout(bindHandlers, 0);
+
+    function bindHandlers() {
+        const reelectBtn = document.getElementById("reelect-button");
+        const cancelBtn = document.getElementById("election-cancel");
+        const submitBtn = document.getElementById("election-submit");
+        const modal = document.getElementById("election-modal");
+
+        console.debug("[election] bindHandlers",
+            { reelectBtn: !!reelectBtn, cancelBtn: !!cancelBtn, submitBtn: !!submitBtn, modal: !!modal });
+
+        if (reelectBtn && !reelectBtn.__electionBound) {
+            reelectBtn.__electionBound = true;
+            reelectBtn.addEventListener("click", () => {
+                renderElectionList();
+                openElectionModal();
+            });
+            //console.debug("[election] click bound to #reelect-button");
+        }
+
+        if (cancelBtn && !cancelBtn.__electionBound) {
+            cancelBtn.__electionBound = true;
+            cancelBtn.addEventListener("click", closeElectionModal);
+        }
+
+        if (modal && !modal.__electionBound) {
+            modal.__electionBound = true;
+            modal.addEventListener("click", (e) => {
+                if (e.target === modal) closeElectionModal();
+            });
+        }
+
+        if (submitBtn && !submitBtn.__electionBound) {
+            submitBtn.__electionBound = true;
+            submitBtn.addEventListener("click", async () => {
+                if (!selectedCandidateId) {
+                    if (typeof showMessage === "function") showMessage("Выберите кандидата.", "warning");
+                    return;
+                }
+
+                const reelectBtnNow = document.getElementById("reelect-button");
+                const url = reelectBtnNow && reelectBtnNow.getAttribute("data-vote-url");
+                if (!url) {
+                    if (typeof showMessage === "function") showMessage("URL голосования не настроен.", "error");
+                    return;
+                }
+
+                const prevText = submitBtn.textContent;
+                submitBtn.disabled = true;
+                submitBtn.textContent = "Отправка...";
+
+                try {
+                    const res = await fetch(url, {
+                        method: "POST",
+                        headers: {
+                            "X-CSRFToken": window.csrfToken,
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({ candidate_id: selectedCandidateId }),
+                    });
+
+                    let payload = null;
+                    try { payload = await res.json(); } catch (_) {}
+
+                    if (!res.ok) {
+                        const msg = (payload && (payload.error || payload.message)) || "Ошибка при голосовании.";
+                        if (typeof showMessage === "function") showMessage(msg, "error");
+                    } else {
+                        if (typeof showMessage === "function") showMessage("Голос учтён.", "success");
+                        closeElectionModal();
+                    }
+                } catch {
+                    if (typeof showMessage === "function") showMessage("Сеть недоступна. Повторите позже.", "error");
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = prevText;
+                }
+            });
+        }
+    }
+}

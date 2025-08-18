@@ -1,4 +1,5 @@
 import random
+import json
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
@@ -13,6 +14,33 @@ from asgiref.sync import async_to_sync
 
 from .forms import GameCreateForm, GameSettingsForm
 from .models import Game, GamePlayer
+
+
+def get_game_update_data(game_id):
+    from .models import Game, GamePlayer
+    game = Game.objects.get(id=game_id)
+    players = (GamePlayer.objects
+               .filter(game=game, is_active=True)
+               .select_related("user"))
+
+    return {
+        "players": [
+            {
+                "id": p.id,
+                "username": p.user.username,
+                "money": p.money,
+                "influence": p.influence,
+                "role": p.get_role_display(),
+                "special_role": p.special_role,
+                "is_observer": p.is_observer,
+                "is_active": p.is_active,
+            }
+            for p in players
+        ],
+        "is_voting": game.is_voting,
+        "paused": game.is_paused(),
+        "election_remaining": game.election_remaining_seconds() if game.is_voting else 0,
+    }
 
 
 @require_POST
@@ -54,39 +82,15 @@ def send_personal_message(user_id, message: str, level: str = "info", extra_data
 
 
 def send_game_update(game_id):
-    from .models import Game, GamePlayer
     from asgiref.sync import async_to_sync
     from channels.layers import get_channel_layer
 
     channel_layer = get_channel_layer()
-    game = Game.objects.get(id=game_id)
-    players = GamePlayer.objects.filter(game=game).select_related("user").filter(is_active=True)
-
-    data = {
-        "players": [
-            {
-                "id": p.id,
-                "username": p.user.username,
-                "money": p.money,
-                "influence": p.influence,
-                "role": p.get_role_display(),
-                "special_role": p.special_role,
-                "is_observer": p.is_observer,
-                "is_active": p.is_active,
-            }
-            for p in players
-        ],
-        "is_voting": game.is_voting,
-        "paused": game.is_paused(),
-        "election_remaining": game.election_remaining_seconds() if game.is_voting else 0,
-    }
+    data = get_game_update_data(game_id)
     try:
         async_to_sync(channel_layer.group_send)(
             f"game_{game_id}",
-            {
-                "type": "game_update",
-                "data": data,
-            }
+            {"type": "game_update", "data": data}
         )
     except Exception as e:
         print(f"[WebSocket] Ошибка при обновлении данных: {e}")
@@ -302,40 +306,35 @@ def toggle_mode(request, game_id):
 
 
 @login_required
+@require_POST
 @pause_protected
-def reelect_state_official(request, game_id):
+def vote_for_official(request, game_id):
     game = get_object_or_404(Game, id=game_id)
+    player = get_object_or_404(GamePlayer, game=game, user=request.user)
 
-    if not game.election_due():
-        messages.warning(request, 'Переизбрание возможно раз в 1.5 часа.')
-        return JsonResponse({'status': 'ok'})
+    # парсим JSON
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+        candidate_id = int(payload.get("candidate_id"))
+    except Exception:
+        return JsonResponse({"error": "Неверные данные"}, status=400)
 
-    players = GamePlayer.objects.filter(game=game, is_active=True)
-    if not players:
-        messages.error(request, 'Нет игроков для голосования.')
-        return JsonResponse({'status': 'ok'})
+    # базовые проверки
+    if player.is_observer:
+        return JsonResponse({"error": "Наблюдатель не может голосовать"}, status=400)
+    try:
+        candidate = GamePlayer.objects.get(id=candidate_id, game=game, is_active=True, is_observer=False)
+    except GamePlayer.DoesNotExist:
+        return JsonResponse({"error": "Кандидат не найден"}, status=404)
+    if candidate.user_id == request.user.id:
+        return JsonResponse({"error": "Нельзя голосовать за себя"}, status=400)
 
-    new_official = max(players, key=lambda p: p.influence)
+    # TODO: сохранить голос (в модель голосования) и, при необходимости, завершить голосование/подсчитать
+    # ... твоя логика голосования ...
 
-    # Снятие текущего политика
-    if game.state_official and game.state_official != new_official.user.playerprofile:
-        old_profile = game.state_official
-        old_gp = GamePlayer.objects.filter(game=game, user=old_profile.user).first()
-        if old_gp and old_gp.role == 5:
-            old_gp.role = 1
-            old_gp.save()
-
-    new_official.role = 5
-    new_official.save()
-
-    game.state_official = new_official.user.playerprofile
-    game.last_election_time = timezone.now()
-    game.save()
-
+    # отправить обновление игрокам
     send_game_update(game.id)
-    messages.success(request, f'Новый государственный деятель: {new_official.user.username}')
-    return JsonResponse({'status': 'ok'})
-
+    return JsonResponse({"status": "ok"})
 
 @login_required
 @pause_protected

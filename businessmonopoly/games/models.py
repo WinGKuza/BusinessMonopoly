@@ -125,3 +125,13 @@ class GamePlayer(models.Model):
 
     def get_role_display(self):
         return dict(self.ROLE_CHOICES).get(self.role, 'Неизвестно') if not self.special_role else dict(self.SPECIAL_ROLE_CHOICES).get(self.special_role, 'Неизвестно')
+
+
+class ElectionVote(models.Model):
+    game = models.ForeignKey('Game', on_delete=models.CASCADE, related_name='votes')
+    voter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='game_votes')
+    candidate = models.ForeignKey('GamePlayer', on_delete=models.CASCADE, related_name='received_votes')
+    started_at = models.DateTimeField()  # фиксируем "идентификатор" текущих выборов
+
+    class Meta:
+        unique_together = ('game', 'voter', 'started_at')

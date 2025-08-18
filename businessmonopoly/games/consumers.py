@@ -1,6 +1,7 @@
 import json
+from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-
+from .views import get_game_update_data
 
 class GameConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -16,6 +17,12 @@ class GameConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
         await self.channel_layer.group_add(self.user_group_name, self.channel_name)
         await self.accept()
+
+        data = await sync_to_async(get_game_update_data)(self.game_id)
+        await self.channel_layer.send(self.channel_name, {
+            "type": "game_update",
+            "data": data,
+        })
 
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(self.room_group_name, self.channel_name)

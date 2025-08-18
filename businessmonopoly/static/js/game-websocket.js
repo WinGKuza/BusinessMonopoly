@@ -90,6 +90,18 @@ export function initWebSocket(gameId, currentUsername) {
                         document.getElementById("player-role").textContent = player.role;
                     }
                 });
+
+                // ОБНОВЛЕНИЕ СПИСКА КАНДИДАТОВ ДЛЯ ГОЛОСОВАНИЯ
+                window.voteCandidates = update.players
+                  .filter(p => !p.is_observer && p.is_active && p.username !== currentUsername)
+                  .map(p => ({ id: p.id, username: p.username }));
+
+                // если модалка открыта — перерисовать список
+                const electionModal = document.getElementById("election-modal");
+                if (electionModal && electionModal.style.display === "flex"
+                    && typeof window.renderElectionList === "function") {
+                  window.renderElectionList();
+                }
             }
 
             const electionBlock = document.getElementById("election-block");
