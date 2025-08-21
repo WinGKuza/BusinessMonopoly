@@ -12,35 +12,10 @@ from functools import wraps
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
+from .votes import VoteService
 from .forms import GameCreateForm, GameSettingsForm
 from .models import Game, GamePlayer
-
-
-def get_game_update_data(game_id):
-    from .models import Game, GamePlayer
-    game = Game.objects.get(id=game_id)
-    players = (GamePlayer.objects
-               .filter(game=game, is_active=True)
-               .select_related("user"))
-
-    return {
-        "players": [
-            {
-                "id": p.id,
-                "username": p.user.username,
-                "money": p.money,
-                "influence": p.influence,
-                "role": p.get_role_display(),
-                "special_role": p.special_role,
-                "is_observer": p.is_observer,
-                "is_active": p.is_active,
-            }
-            for p in players
-        ],
-        "is_voting": game.is_voting,
-        "paused": game.is_paused(),
-        "election_remaining": game.election_remaining_seconds() if game.is_voting else 0,
-    }
+from .realtime import send_game_update, send_personal_message, broadcast_personal_to_game
 
 
 @require_POST
@@ -52,48 +27,6 @@ def save_game(request, game_id):
 
     send_game_update(game.id)
     return JsonResponse({'status': 'ok'})
-
-
-def send_personal_message(user_id, message: str, level: str = "info", extra_data=None):
-    level = level.lower()
-    if level not in {"info", "success", "warning", "error"}:
-        level = "info"
-
-    payload = {
-        "type": "personal_message",
-        "message": {
-            "type": "personal",
-            "message": message,
-            "level": level,
-        }
-    }
-
-    if extra_data:
-        payload["message"]["data"] = extra_data
-
-    try:
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            f"user_{user_id}",
-            payload
-        )
-    except Exception as e:
-        print(f"[WebSocket] Ошибка отправки личного сообщения: {e}")
-
-
-def send_game_update(game_id):
-    from asgiref.sync import async_to_sync
-    from channels.layers import get_channel_layer
-
-    channel_layer = get_channel_layer()
-    data = get_game_update_data(game_id)
-    try:
-        async_to_sync(channel_layer.group_send)(
-            f"game_{game_id}",
-            {"type": "game_update", "data": data}
-        )
-    except Exception as e:
-        print(f"[WebSocket] Ошибка при обновлении данных: {e}")
 
 
 def _update_pause_state(game):
@@ -312,27 +245,19 @@ def vote_for_official(request, game_id):
     game = get_object_or_404(Game, id=game_id)
     player = get_object_or_404(GamePlayer, game=game, user=request.user)
 
-    # парсим JSON
     try:
         payload = json.loads(request.body.decode("utf-8"))
         candidate_id = int(payload.get("candidate_id"))
     except Exception:
         return JsonResponse({"error": "Неверные данные"}, status=400)
 
-    # базовые проверки
-    if player.is_observer:
-        return JsonResponse({"error": "Наблюдатель не может голосовать"}, status=400)
     try:
-        candidate = GamePlayer.objects.get(id=candidate_id, game=game, is_active=True, is_observer=False)
-    except GamePlayer.DoesNotExist:
-        return JsonResponse({"error": "Кандидат не найден"}, status=404)
-    if candidate.user_id == request.user.id:
-        return JsonResponse({"error": "Нельзя голосовать за себя"}, status=400)
+        VoteService.cast_vote(game, request.user, candidate_id)
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+    except Exception:
+        return JsonResponse({"error": "Не удалось сохранить голос"}, status=500)
 
-    # TODO: сохранить голос (в модель голосования) и, при необходимости, завершить голосование/подсчитать
-    # ... твоя логика голосования ...
-
-    # отправить обновление игрокам
     send_game_update(game.id)
     return JsonResponse({"status": "ok"})
 
@@ -365,12 +290,13 @@ def delete_game(request, game_id):
     game_name = game.name
     redirect_url = request.build_absolute_uri(reverse('game_list'))
 
-    user_ids = (GamePlayer.objects
-                .filter(game=game)
-                .values_list("user_id", flat=True)
-                .distinct())
-    for uid in user_ids:
-        send_personal_message(uid, f"Игра «{game_name}» была удалена", level="warning")
+    broadcast_personal_to_game(
+        game_id,
+        f"Игра «{game_name}» была удалена",
+        level="warning",
+        include_observers=True,
+        active_only=False,  # важно: шлём и тем, кто уже вышел
+    )
 
     async_to_sync(channel_layer.group_send)(
         f"game_{game_id}",
@@ -382,6 +308,7 @@ def delete_game(request, game_id):
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({'status': 'deleted'})
     return redirect('create_game')
+
 
 
 

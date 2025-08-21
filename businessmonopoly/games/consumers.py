@@ -1,7 +1,7 @@
 import json
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .views import get_game_update_data
+from .realtime import get_game_update_data, send_game_update
 
 class GameConsumer(AsyncWebsocketConsumer):
     async def connect(self):

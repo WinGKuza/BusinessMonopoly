@@ -3,6 +3,9 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.validators import MinValueValidator
 
 import logging
 logger = logging.getLogger(__name__)
@@ -59,11 +62,32 @@ class Game(models.Model):
         self.voting_paused_at = None
         self.voting_total_paused_seconds = 0
         self.save(update_fields=["is_voting", "voting_started_at", "voting_paused_at", "voting_total_paused_seconds"])
+        from .votes import VoteService
+        VoteService.start_election_for_game(self, started_at=self.voting_started_at)
         logger.info("[ELECTION] START game=%s at=%s", self.id, self.voting_started_at)
 
     def end_election(self):
         if not self.is_voting:
             return
+        # закрыть VoteSession и определить победителя
+        from .votes import VoteService
+        winner_gp = VoteService.finish_force(self)
+        # применяем результат (назначаем политика)
+        if winner_gp is not None:
+            # снимаем статус 'Политик' со всех, назначаем победителя
+            GamePlayer.objects.filter(game=self, special_role=2).update(special_role=0)
+            winner_gp.special_role = 2  # Политик
+            winner_gp.save(update_fields=["special_role"])
+
+        from .realtime import broadcast_personal_to_game
+        broadcast_personal_to_game(
+            self.id,
+            f"«{winner_gp.user.username}» — новый Политик! 🎉",
+            level="success",
+            extra_data={"winner_player_id": winner_gp.id, "role": "Политик"},
+            include_observers=True,
+        )
+
         self.is_voting = False
         self.last_election_time = timezone.now()
         self.voting_paused_at = None
@@ -108,7 +132,7 @@ class GamePlayer(models.Model):
         (2, 'Политик'),
     ]
     role = models.IntegerField(choices=ROLE_CHOICES, default=1)
-    special_role = models.IntegerField(choices=ROLE_CHOICES, default=0)
+    special_role = models.IntegerField(choices=SPECIAL_ROLE_CHOICES, default=0)
     game = models.ForeignKey(Game, related_name='game_players', on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='game_players', on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
@@ -135,3 +159,75 @@ class ElectionVote(models.Model):
 
     class Meta:
         unique_together = ('game', 'voter', 'started_at')
+
+
+class VoteSession(models.Model):
+    KIND_ELECTION = "election"
+    KIND_EVENT = "event"
+    KIND_CHOICES = [(KIND_ELECTION, "Election"), (KIND_EVENT, "Event")]
+
+    game = models.ForeignKey('Game', on_delete=models.CASCADE, related_name='vote_sessions')
+    kind = models.CharField(max_length=32, choices=KIND_CHOICES)
+    question = models.CharField(max_length=255, blank=True)
+    started_at = models.DateTimeField(db_index=True, default=timezone.now)
+    ends_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    meta = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['game', 'is_active']),
+            models.Index(fields=['game', 'kind', 'started_at']),
+        ]
+
+    def tally(self):
+        return (VoteBallot.objects.filter(session=self)
+                .values('option_id')
+                .annotate(count=models.Count('id'))
+                .order_by('-count', 'option_id'))
+
+    def voters_count(self):
+        return (VoteBallot.objects.filter(session=self)
+                .values('voter_id').distinct().count())
+
+    def has_everyone_voted(self, expected_count: int) -> bool:
+        return self.voters_count() >= expected_count
+
+    def close(self):
+        if not self.is_active:
+            return
+        self.is_active = False
+        self.ends_at = timezone.now()
+        self.save(update_fields=['is_active', 'ends_at'])
+
+
+class VoteOption(models.Model):
+    session = models.ForeignKey(VoteSession, on_delete=models.CASCADE, related_name='options')
+    label = models.CharField(max_length=255, blank=True)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+    target = GenericForeignKey('content_type', 'object_id')
+    weight = models.IntegerField(default=0, validators=[MinValueValidator(0)])
+
+    class Meta:
+        unique_together = ('session', 'content_type', 'object_id')
+        indexes = [models.Index(fields=['session'])]
+
+
+class VoteBallot(models.Model):
+    session = models.ForeignKey(VoteSession, on_delete=models.CASCADE, related_name='ballots')
+    voter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='ballots')
+    option = models.ForeignKey(VoteOption, on_delete=models.CASCADE, related_name='ballots')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('session', 'voter')
+        indexes = [
+            models.Index(fields=['session', 'voter']),
+            models.Index(fields=['session', 'option']),
+        ]
+
+    def clean(self):
+        if self.option.session_id != self.session_id:
+            from django.core.exceptions import ValidationError
+            raise ValidationError("Option must belong to the same session.")

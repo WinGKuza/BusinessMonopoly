@@ -4,7 +4,7 @@ from celery.utils.log import get_task_logger
 from django.utils import timezone
 from django.db import transaction, models
 from .models import Game
-from .views import send_game_update
+from .realtime import send_game_update, notify_group
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
@@ -55,3 +55,59 @@ def check_and_finish_elections():
         touched += 1
 
     logger.debug("[ELECTION] tick checked=%d touched=%d", Game.objects.count(), touched)
+
+
+@shared_task(name="games.tasks.maybe_close_early")
+def maybe_close_early(game_id: str):
+    """
+    Если все активные не-наблюдатели проголосовали — досрочно завершаем выборы.
+    """
+    from .models import Game, GamePlayer, VoteSession  # локальный импорт, чтобы не ловить циклы
+
+    try:
+        game = Game.objects.get(pk=game_id)
+    except Game.DoesNotExist:
+        return
+
+    # Если уже не идет голосование — выходим
+    if not game.is_voting:
+        return
+
+    try:
+        session = VoteSession.objects.get(game=game, kind='election', is_active=True)
+    except VoteSession.DoesNotExist:
+        return
+
+    # ожидаемое число голосующих: активные не-наблюдатели
+    expected = GamePlayer.objects.filter(game=game, is_active=True, is_observer=False).count()
+    if expected == 0:
+        return
+
+    # сколько уже проголосовало
+    voted = session.voters_count()
+
+    if voted < expected:
+        return
+
+    # Все проголосовали — закрываем
+    with transaction.atomic():
+        # Повторная проверка под блокировкой состояния игры
+        game = Game.objects.select_for_update().get(pk=game.pk)
+        if not game.is_voting:
+            return
+        # завершит VoteSession, определит победителя и назначит Политика
+        game.end_election()
+
+    # уведомляем клиентов так же, как в check_and_finish_elections()
+    try:
+        from .views import send_game_update
+        send_game_update(game.id)
+
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"game_{game.id}", {"type": "voting_ended"}
+        )
+    except Exception:
+        pass
