@@ -69,30 +69,51 @@ class Game(models.Model):
     def end_election(self):
         if not self.is_voting:
             return
-        # закрыть VoteSession и определить победителя
+
         from .votes import VoteService
-        winner_gp = VoteService.finish_force(self)
-        # применяем результат (назначаем политика)
+
+        winner_gp = None
+        try:
+            winner_gp = VoteService.finish_force(self)
+        except Exception:
+            logger.exception("[ELECTION] finish_force failed game=%s", self.id)
+
+        # Победитель есть -> снимаем старых политиков и назначаем нового
         if winner_gp is not None:
-            # снимаем статус 'Политик' со всех, назначаем победителя
-            GamePlayer.objects.filter(game=self, special_role=2).update(special_role=0)
-            winner_gp.special_role = 2  # Политик
-            winner_gp.save(update_fields=["special_role"])
+            # сбросим у всех остальных (исключим победителя, чтобы не дергать его лишний раз)
+            GamePlayer.objects.filter(game=self, special_role=2).exclude(pk=winner_gp.pk).update(special_role=0)
+            if winner_gp.special_role != 2:
+                winner_gp.special_role = 2
+                winner_gp.save(update_fields=["special_role"])
 
-        from .realtime import broadcast_personal_to_game
-        broadcast_personal_to_game(
-            self.id,
-            f"«{winner_gp.user.username}» — новый Политик! 🎉",
-            level="success",
-            extra_data={"winner_player_id": winner_gp.id, "role": "Политик"},
-            include_observers=True,
-        )
+            # Объявление
+            from .realtime import broadcast_personal_to_game
+            broadcast_personal_to_game(
+                self.id,
+                f"«{winner_gp.user.username}» — новый Политик! 🎉",
+                level="success",
+                extra_data={"winner_player_id": winner_gp.id, "role": "Политик"},
+                include_observers=True,
+            )
+        else:
+            # Победителя нет (нет бюллетеней / всё занулено) — никого не трогаем
+            from .realtime import broadcast_personal_to_game
+            broadcast_personal_to_game(
+                self.id,
+                "Голосование завершено. Победитель не определён.",
+                level="warning",
+                extra_data={"reason": "no_votes"},
+                include_observers=True,
+            )
 
+        # Закрываем раунд
         self.is_voting = False
         self.last_election_time = timezone.now()
         self.voting_paused_at = None
         self.voting_total_paused_seconds = 0
-        self.save(update_fields=["is_voting", "last_election_time", "voting_paused_at", "voting_total_paused_seconds"])
+        self.save(update_fields=[
+            "is_voting", "last_election_time", "voting_paused_at", "voting_total_paused_seconds"
+        ])
         logger.info("[ELECTION] END   game=%s at=%s", self.id, self.last_election_time)
 
     def election_elapsed_seconds(self) -> int:

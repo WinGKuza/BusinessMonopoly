@@ -9,6 +9,12 @@ export function initWebSocket(gameId, currentUsername) {
         if (data.type === "personal") {
             const msg = data.message;
 
+            if (msg.data && msg.data.kind === "question") {
+              // Покажем модалку с вопросом и вариантами
+              showQuestionModal(msg.data);
+              return; // дальше обычные ветки не нужны
+            }
+
             if (typeof msg === "string") {
                 showMessage(msg, "info");
             } else {

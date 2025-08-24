@@ -16,6 +16,7 @@ from .votes import VoteService
 from .forms import GameCreateForm, GameSettingsForm
 from .models import Game, GamePlayer
 from .realtime import send_game_update, send_personal_message, broadcast_personal_to_game
+from .questions import load_questions
 
 
 @require_POST
@@ -435,3 +436,124 @@ def home(request):
         form = GameCreateForm()
 
     return render(request, 'main/home.html', {'form': form, 'error': error})
+
+
+@login_required
+@require_POST
+def ask_question(request, game_id):
+    """
+    Политик выбирает игрока -> тому уходит персональный вопрос по WS.
+    body: {"target_player_id": <int>}
+    """
+    game = get_object_or_404(Game, id=game_id)
+    asker_gp = get_object_or_404(GamePlayer, game=game, user=request.user)
+
+    if asker_gp.special_role != 2:
+        return JsonResponse({"error": "Только Политик может задавать вопросы."}, status=403)
+
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+        target_id = int(payload.get("target_player_id"))
+    except Exception:
+        return JsonResponse({"error": "Неверные данные"}, status=400)
+
+    target_gp = get_object_or_404(
+        GamePlayer, id=target_id, game=game, is_active=True, is_observer=False
+    )
+    if target_gp.user_id == request.user.id:
+        return JsonResponse({"error": "Нельзя задавать вопрос самому себе."}, status=400)
+
+    questions = load_questions("ru")
+    if not questions:
+        return JsonResponse({"error": "Нет доступных вопросов."}, status=500)
+
+    q = random.choice(questions)
+    # формируем полезную нагрузку для клиента
+    extra = {
+        "kind": "question",
+        "question_id": q.get("id"),
+        "text": q.get("text"),
+        "choices": q.get("choices") or q.get("options") or [],
+        "from_politician": asker_gp.user.username,
+        "game_id": str(game.id),
+    }
+
+    send_personal_message(
+        target_gp.user_id,
+        f"Вопрос от Политика {asker_gp.user.username}:",
+        level="info",
+        extra_data=extra,
+    )
+
+    return JsonResponse({"status": "ok"})
+
+
+@login_required
+@require_POST
+def answer_question(request, game_id):
+    """
+    Игрок отправляет ответ. Возвращаем результат и уведомляем Политика.
+    body: {"question_id": <int>, "choice_index": <int>}
+    """
+    game = get_object_or_404(Game, id=game_id)
+    gp = get_object_or_404(GamePlayer, game=game, user=request.user, is_active=True)
+
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+        qid = payload.get("question_id")
+        idx = int(payload.get("choice_index"))
+    except Exception:
+        return JsonResponse({"error": "Неверные данные"}, status=400)
+
+    questions = load_questions("ru")
+    q = next((item for item in questions if str(item.get("id")) == str(qid)), None)
+    if not q:
+        return JsonResponse({"error": "Вопрос не найден."}, status=404)
+
+    choices = q.get("choices") or q.get("options") or []
+    if not (0 <= idx < len(choices)):
+        return JsonResponse({"error": "Некорректный вариант."}, status=400)
+
+    is_correct = None
+    if "correct" in q:
+        is_correct = (idx == int(q["correct"]))
+
+    # Найдём текущего Политика (может быть один)
+    politician = GamePlayer.objects.filter(game=game, special_role=2).first()
+
+    # Ответившему — фидбэк
+    msg = "Ответ принят."
+    if is_correct is True:
+        msg = "Верно! 🎉"
+    elif is_correct is False:
+        msg = "Неверно."
+
+
+    send_personal_message(
+        gp.user_id,
+        msg,
+        level="success" if is_correct else "info",
+        extra_data={
+            "kind": "question_result",
+            "question_id": qid,
+            "your_choice": idx,
+            "correct": q.get("correct", None),
+        },
+    )
+
+    # Политику — отчёт
+    if politician:
+        send_personal_message(
+            politician.user_id,
+            f"{gp.user.username} ответил на ваш вопрос.",
+            level="info",
+            extra_data={
+                "kind": "question_report",
+                "player": gp.user.username,
+                "question_id": qid,
+                "choice": idx,
+                "correct": q.get("correct", None),
+            },
+        )
+
+    return JsonResponse({"status": "ok", "correct": is_correct})

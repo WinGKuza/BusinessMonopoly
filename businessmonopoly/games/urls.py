@@ -18,5 +18,7 @@ urlpatterns = [
     path('<uuid:game_id>/transfer/', views.transfer_money, name='transfer_money'),
     path('<uuid:game_id>/toggle_pause/', views.toggle_pause, name='toggle_pause'),
     path('<uuid:game_id>/upgrade_role/', views.upgrade_role, name='upgrade_role'),
+    path('<uuid:game_id>/ask-question/', views.ask_question, name='ask_question'),
+    path('<uuid:game_id>/answer-question/', views.answer_question, name='answer_question'),
 ]
 

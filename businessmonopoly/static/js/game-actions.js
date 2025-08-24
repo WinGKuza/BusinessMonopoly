@@ -284,3 +284,43 @@ export function initElectionUI(currentUsername) {
         }
     }
 }
+
+
+export function initPoliticianQuestions(gameId, csrfToken) {
+  const btn = document.getElementById("ask-question-button");
+  if (!btn) return;
+
+  const modal = document.getElementById("ask-question-modal");
+  const sel = document.getElementById("ask-target");
+  const cancel = document.getElementById("ask-cancel");
+  const send = document.getElementById("ask-send");
+
+  btn.addEventListener("click", () => {
+    modal.style.display = "flex";
+  });
+  cancel.addEventListener("click", () => {
+    modal.style.display = "none";
+  });
+
+  send.addEventListener("click", async () => {
+    const target = sel.value;
+    try {
+      const resp = await fetch(`/games/${gameId}/ask-question/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify({ target_player_id: parseInt(target, 10) }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Ошибка");
+      if (typeof showMessage === "function") showMessage("Вопрос отправлен.", "success");
+    } catch (e) {
+      if (typeof showMessage === "function") showMessage(String(e.message || e), "error");
+    } finally {
+      modal.style.display = "none";
+    }
+  });
+}

@@ -69,7 +69,7 @@
         <div style="display: flex; gap: 10px; margin-top: 15px;">
             <button onclick="document.getElementById('transfer-form').style.display='block'"
                 style="flex: 1; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
-                Перевести
+                💱 Перевести
             </button>
 
             {% if player.special_role == 0 and player.role < 3 %}
@@ -93,13 +93,37 @@
         </form>
     </div>
 
-    <div id="election-block" style="display:none; margin-top: 15px;">
+    <div id="election-block" style="display:none; margin-top: 10px;">
         <button id="reelect-button"
                 data-vote-url="{% url 'vote_for_official' game.id %}"
                 style="flex: 1; width: 100%; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
                 🔄 Переизбрать Политика
         </button>
     </div>
+
+    {% if player.special_role == 2 %}
+    <button id="ask-question-button"
+            style="flex: 1; margin-top: 10px; width: 100%; padding: 10px 0; font-size: 16px; background-color: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer;">
+        ❓ Задать вопрос
+    </button>
+
+    <div id="ask-question-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:3000; align-items:center; justify-content:center;">
+      <div style="background:#fff; padding:16px; border-radius:8px; width:360px;">
+        <h3 style="margin-top:0;">Кому задать вопрос?</h3>
+        <select id="ask-target" style="width:100%; padding:6px 8px;">
+          {% for gp in players %}
+            {% if not gp.is_observer and gp.user != request.user %}
+              <option value="{{ gp.id }}">{{ gp.user.username }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px;">
+          <button id="ask-cancel">Отмена</button>
+          <button id="ask-send">Отправить</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
     <div id="election-modal"
          style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
@@ -149,6 +173,7 @@
         submitSettings,
         upgradeRole,
         initElectionUI,
+        initPoliticianQuestions,
     } from "{% static 'js/game-actions.js' %}";
 
     document.addEventListener("DOMContentLoaded", () => {
@@ -156,6 +181,7 @@
             submitTransfer(window.gameId, window.csrfToken);
             submitSettings(window.gameId, window.csrfToken);
             upgradeRole(window.gameId, window.csrfToken);
+            initPoliticianQuestions(window.gameId, window.csrfToken);
         }
 
         initElectionUI("{{ request.user.username }}");
