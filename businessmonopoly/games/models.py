@@ -172,16 +172,6 @@ class GamePlayer(models.Model):
         return dict(self.ROLE_CHOICES).get(self.role, 'Неизвестно') if not self.special_role else dict(self.SPECIAL_ROLE_CHOICES).get(self.special_role, 'Неизвестно')
 
 
-class ElectionVote(models.Model):
-    game = models.ForeignKey('Game', on_delete=models.CASCADE, related_name='votes')
-    voter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='game_votes')
-    candidate = models.ForeignKey('GamePlayer', on_delete=models.CASCADE, related_name='received_votes')
-    started_at = models.DateTimeField()  # фиксируем "идентификатор" текущих выборов
-
-    class Meta:
-        unique_together = ('game', 'voter', 'started_at')
-
-
 class VoteSession(models.Model):
     KIND_ELECTION = "election"
     KIND_EVENT = "event"
@@ -252,3 +242,25 @@ class VoteBallot(models.Model):
         if self.option.session_id != self.session_id:
             from django.core.exceptions import ValidationError
             raise ValidationError("Option must belong to the same session.")
+
+
+class AskedQuestion(models.Model):
+    game = models.ForeignKey('Game', on_delete=models.CASCADE, related_name='asked_questions')
+    question_id = models.IntegerField()
+    asked_by = models.ForeignKey('GamePlayer', on_delete=models.CASCADE, related_name='questions_asked')
+    target = models.ForeignKey('GamePlayer', on_delete=models.CASCADE, related_name='questions_received')
+    created_at = models.DateTimeField(auto_now_add=True)
+    answered = models.BooleanField(default=False)
+    answer_choice = models.IntegerField(null=True, blank=True)
+    is_correct = models.BooleanField(null=True, blank=True)
+    token = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['game', 'answered']),
+            models.Index(fields=['target', 'answered']),
+            models.Index(fields=['asked_by', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"Q#{self.question_id} {self.asked_by_id}->{self.target_id} ({'done' if self.answered else 'open'})"

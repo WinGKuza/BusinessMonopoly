@@ -17,6 +17,7 @@ def get_game_update_data(game_id):
                 "money": p.money,
                 "influence": p.influence,
                 "role": p.get_role_display(),
+                "role_id": p.role,
                 "special_role": p.special_role,
                 "is_observer": p.is_observer,
                 "is_active": p.is_active,

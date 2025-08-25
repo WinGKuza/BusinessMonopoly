@@ -7,6 +7,21 @@
           content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css">
+    <style>
+      /* Помечаем все кнопки, которые должны блокироваться при паузе, атрибутом data-pause */
+      button[data-pause] {
+        transition: opacity .15s ease, transform .02s ease;
+      }
+
+      /* Визуал при паузе/disabled для кнопок */
+      button[data-pause].paused,
+      button[data-pause]:disabled {
+        opacity: .55 !important;
+        cursor: not-allowed !important;
+        box-shadow: none !important;
+        transform: none !important;
+      }
+    </style>
 </head>
 
 <body>
@@ -88,7 +103,7 @@
     if (flash) {
       try {
         const { text, level } = JSON.parse(flash);
-        showMessage(text, level);      // <--- ИМЯ НЕ МЕНЯЕМ
+        showMessage(text, level);
       } catch (_) {}
       sessionStorage.removeItem("flash_message");
     }

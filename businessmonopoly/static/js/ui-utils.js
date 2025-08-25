@@ -130,49 +130,108 @@ export function showQuestionModal(q, opts = {}) {
   btnCancel.addEventListener("click", close);
 
   btnSend.addEventListener("click", async () => {
-    const sel = wrap.querySelector('input[name="q_choice"]:checked');
-    if (!sel) {
-      if (typeof showMessage === "function") showMessage("Выберите вариант.", "warning");
-      return;
-    }
-    const choiceIndex = parseInt(sel.value, 10);
+  const sel = wrap.querySelector('input[name="q_choice"]:checked');
+  if (!sel) {
+    if (typeof showMessage === "function") showMessage("Выберите вариант.", "warning");
+    return;
+  }
 
-    try {
-      if (onSubmit) {
-        // пользовательский обработчик (если передали)
-        await onSubmit({ question_id: q.question_id, choice_index: choiceIndex });
-      } else {
-        // дефолт: шлём на /answer-question/
-        const resp = await fetch(answerUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken,
-            "X-Requested-With": "XMLHttpRequest",
-          },
-          body: JSON.stringify({ question_id: q.question_id, choice_index: choiceIndex }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data?.error || "Ошибка");
+  const choiceIndex = parseInt(sel.value, 10);
 
-        /*if (typeof showMessage === "function") {
-          if (data.correct === true) showMessage("Верно! 🎉", "success");
-          else if (data.correct === false) showMessage("Неверно.", "warning");
-          else showMessage("Ответ отправлен.", "info");
-        }*/
+  // защита от повторной отправки
+  const prevText = btnSend.textContent;
+  btnSend.disabled = true;
+  btnSend.textContent = "Отправка...";
+
+  try {
+    if (onSubmit) {
+      // Кастомный обработчик, если был передан при вызове showQuestionModal
+      await onSubmit({ question_id: q.question_id, choice_index: choiceIndex, ask_token: q.ask_token });
+    } else {
+      // Дефолт: POST на /answer-question/
+      const body = { question_id: q.question_id, choice_index: choiceIndex };
+      if (q.ask_token) body.ask_token = q.ask_token;
+
+      const resp = await fetch(answerUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (resp.status === 204) {  // пауза: тост уже пришёл через WS
+        close();
+        return;
       }
-      close();
-    } catch (e) {
-      if (typeof showMessage === "function") showMessage(String(e?.message || e), "error");
+
+      let data = {};
+      try { data = await resp.json(); } catch {}
+
+      if (!resp.ok) {
+        throw new Error(data?.error || `Ошибка ${resp.status}`);
+      }
+
+      /*
+      const showLocal = opts?.showLocalFeedback !== false;
+      if (showLocal && typeof showMessage === "function") {
+        if (data.correct === true) showMessage("Верно! 🎉", "success");
+        else if (data.correct === false) showMessage("Неверно.", "warning");
+        else showMessage("Ответ отправлен.", "info");
+      }*/
+
+      // (опц.) отметим ack, чтобы WS-обработчик, если он есть, не дублировал тост
+      window.__questionAck__ = window.__questionAck__ || new Set();
+      const ackKey = `${q.question_id}:${choiceIndex}:${q.ask_token || ""}`;
+      window.__questionAck__.add(ackKey);
     }
-  });
+
+    // Закрываем модалку после успешной отправки
+    close();
+      } catch (e) {
+        if (typeof showMessage === "function") {
+          showMessage(String(e?.message || e), "error");
+        }
+      } finally {
+        btnSend.disabled = false;
+        btnSend.textContent = prevText;
+      }
+    });
+
 
   document.body.appendChild(wrap);
 }
 
-// Сделаем доступными и как ESM-экспорты, и как глобалы (на случай, если где-то ещё используют глобально)
+// Сделаем доступными и как ESM-экспорты, и как глобалы
 if (typeof window !== "undefined") {
   window.showMessage = window.showMessage || showMessage;
   window.showQuestionModal = showQuestionModal;
 }
 
+
+export function applyPauseToButtons(paused) {
+  document.querySelectorAll('button[data-pause]').forEach(btn => {
+    // ставим disabled, плюс класс для визуала (если где-то disabled не хочется)
+    btn.disabled = !!paused;
+    btn.classList.toggle('paused', !!paused);
+    // подсказка
+    if (paused) {
+      if (!btn.dataset.prevTitle) btn.dataset.prevTitle = btn.title || "";
+      btn.title = "Игра на паузе";
+    } else {
+      btn.title = btn.dataset.prevTitle || "";
+      delete btn.dataset.prevTitle;
+    }
+  });
+}
+
+
+export function toggleDisplay(id, showAs = 'block') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const curr = getComputedStyle(el).display;
+  el.style.display = (curr === 'none') ? showAs : 'none';
+}
+window.toggleDisplay = window.toggleDisplay || toggleDisplay;

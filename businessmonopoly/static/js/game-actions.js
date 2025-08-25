@@ -303,24 +303,40 @@ export function initPoliticianQuestions(gameId, csrfToken) {
   });
 
   send.addEventListener("click", async () => {
-    const target = sel.value;
-    try {
-      const resp = await fetch(`/games/${gameId}/ask-question/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": csrfToken,
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        body: JSON.stringify({ target_player_id: parseInt(target, 10) }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "Ошибка");
-      if (typeof showMessage === "function") showMessage("Вопрос отправлен.", "success");
-    } catch (e) {
-      if (typeof showMessage === "function") showMessage(String(e.message || e), "error");
-    } finally {
-      modal.style.display = "none";
+  const target = sel.value;
+  const qidInput = document.getElementById("ask-question-id");
+  const qidRaw = qidInput ? qidInput.value.trim() : "";
+  const payload = { target_player_id: parseInt(target, 10) };
+  if (qidRaw !== "") {
+    const qid = parseInt(qidRaw, 10);
+    if (!Number.isFinite(qid) || qid <= 0) {
+      if (typeof showMessage === "function") showMessage("Некорректный номер вопроса.", "warning");
+      return;
     }
-  });
+    payload.question_id = qid;  // <== отправляем номер
+  }
+
+  try {
+    const resp = await fetch(`/games/${gameId}/ask-question/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": csrfToken,
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (resp.status === 204) return;
+
+    let data = {};
+    try { data = await resp.json(); } catch {}
+    if (!resp.ok) throw new Error(data.error || "Ошибка");
+    if (typeof showMessage === "function") showMessage("Вопрос отправлен.", "success");
+  } catch (e) {
+    if (typeof showMessage === "function") showMessage(String(e.message || e), "error");
+  } finally {
+    modal.style.display = "none";
+  }
+});
 }

@@ -440,11 +440,8 @@ def home(request):
 
 @login_required
 @require_POST
+@pause_protected
 def ask_question(request, game_id):
-    """
-    Политик выбирает игрока -> тому уходит персональный вопрос по WS.
-    body: {"target_player_id": <int>}
-    """
     game = get_object_or_404(Game, id=game_id)
     asker_gp = get_object_or_404(GamePlayer, game=game, user=request.user)
 
@@ -454,6 +451,10 @@ def ask_question(request, game_id):
     try:
         payload = json.loads(request.body.decode("utf-8"))
         target_id = int(payload.get("target_player_id"))
+        # новый параметр (опционально)
+        qid = payload.get("question_id")
+        if qid is not None:
+            qid = int(qid)
     except Exception:
         return JsonResponse({"error": "Неверные данные"}, status=400)
 
@@ -467,17 +468,33 @@ def ask_question(request, game_id):
     if not questions:
         return JsonResponse({"error": "Нет доступных вопросов."}, status=500)
 
-    q = random.choice(questions)
-    # формируем полезную нагрузку для клиента
+    # выбрать вопрос: заданный номер или случайный
+    q = None
+    if qid is not None:
+        q = next((x for x in questions if int(x.get("id")) == qid), None)
+        if not q:
+            return JsonResponse({"error": f"Вопрос #{qid} не найден."}, status=404)
+    else:
+        import random
+        q = random.choice(questions)
+        qid = int(q.get("id"))
+
+    # создаём запись-линк
+    from .models import AskedQuestion
+    asked = AskedQuestion.objects.create(
+        game=game, question_id=qid, asked_by=asker_gp, target=target_gp
+    )
+
+    # отправляем персональный WS получателю
     extra = {
         "kind": "question",
-        "question_id": q.get("id"),
+        "question_id": qid,
         "text": q.get("text"),
         "choices": q.get("choices") or q.get("options") or [],
         "from_politician": asker_gp.user.username,
+        "ask_token": str(asked.token),
         "game_id": str(game.id),
     }
-
     send_personal_message(
         target_gp.user_id,
         f"Вопрос от Политика {asker_gp.user.username}:",
@@ -488,25 +505,44 @@ def ask_question(request, game_id):
     return JsonResponse({"status": "ok"})
 
 
+
 @login_required
 @require_POST
+@pause_protected
 def answer_question(request, game_id):
-    """
-    Игрок отправляет ответ. Возвращаем результат и уведомляем Политика.
-    body: {"question_id": <int>, "choice_index": <int>}
-    """
     game = get_object_or_404(Game, id=game_id)
     gp = get_object_or_404(GamePlayer, game=game, user=request.user, is_active=True)
 
     try:
         payload = json.loads(request.body.decode("utf-8"))
-        qid = payload.get("question_id")
+        qid = int(payload.get("question_id"))
         idx = int(payload.get("choice_index"))
+        ask_token = payload.get("ask_token")  # <== новый параметр
     except Exception:
         return JsonResponse({"error": "Неверные данные"}, status=400)
 
+    # найдём карточку вопроса
+    from .models import AskedQuestion
+    asked: AskedQuestion | None = None
+    if ask_token:
+        asked = AskedQuestion.objects.filter(game=game, token=ask_token).first()
+    if not asked:
+        # fallback: последняя «открытая» карточка для этого игрока и вопроса
+        asked = (AskedQuestion.objects
+                 .filter(game=game, target=gp, question_id=qid, answered=False)
+                 .order_by('-created_at')
+                 .first())
+
+    if not asked:
+        return JsonResponse({"error": "Вопрос не найден или уже закрыт."}, status=404)
+    if asked.target_id != gp.id:
+        return JsonResponse({"error": "Вы не адресат этого вопроса."}, status=403)
+    if asked.answered:
+        return JsonResponse({"error": "Ответ уже принят."}, status=400)
+
+    # проверка варианта
     questions = load_questions("ru")
-    q = next((item for item in questions if str(item.get("id")) == str(qid)), None)
+    q = next((item for item in questions if int(item.get("id")) == qid), None)
     if not q:
         return JsonResponse({"error": "Вопрос не найден."}, status=404)
 
@@ -514,25 +550,32 @@ def answer_question(request, game_id):
     if not (0 <= idx < len(choices)):
         return JsonResponse({"error": "Некорректный вариант."}, status=400)
 
+    has_correct = "correct" in q
     is_correct = None
-    if "correct" in q:
-        is_correct = (idx == int(q["correct"]))
+    if has_correct:
+        try:
+            is_correct = (idx == int(q["correct"]))
+        except Exception:
+            is_correct = None
 
-    # Найдём текущего Политика (может быть один)
-    politician = GamePlayer.objects.filter(game=game, special_role=2).first()
+    # закрываем карточку
+    asked.answered = True
+    asked.answer_choice = idx
+    asked.is_correct = is_correct
+    asked.save(update_fields=["answered", "answer_choice", "is_correct"])
 
-    # Ответившему — фидбэк
+    # Игроку — локальный фидбэк (через WS персоналку)
     msg = "Ответ принят."
+    level = "info"
     if is_correct is True:
-        msg = "Верно! 🎉"
+        msg = "Верно! 🎉"; level = "success"
     elif is_correct is False:
-        msg = "Неверно."
-
+        msg = "Неверно.";  level = "warning"
 
     send_personal_message(
         gp.user_id,
         msg,
-        level="success" if is_correct else "info",
+        level=level,
         extra_data={
             "kind": "question_result",
             "question_id": qid,
@@ -541,19 +584,30 @@ def answer_question(request, game_id):
         },
     )
 
-    # Политику — отчёт
-    if politician:
-        send_personal_message(
-            politician.user_id,
-            f"{gp.user.username} ответил на ваш вопрос.",
-            level="info",
-            extra_data={
-                "kind": "question_report",
-                "player": gp.user.username,
-                "question_id": qid,
-                "choice": idx,
-                "correct": q.get("correct", None),
-            },
-        )
+    # Отправителю (Политику) — отчёт по его вопросу
+    # даже если роль уже сменилась, отчёт уйдёт именно тому, кто отправил
+    polis_user_id = asked.asked_by.user_id
+    report_level = "success" if is_correct else "warning" if is_correct is False else "info"
+    report_msg = f"{gp.user.username} ответил на ваш вопрос №{qid}: "
+    if is_correct is True:
+        report_msg += "верно."
+    elif is_correct is False:
+        report_msg += "неверно."
+    else:
+        report_msg += f"выбрана опция {idx}."
+
+    send_personal_message(
+        polis_user_id,
+        report_msg,
+        level=report_level,
+        extra_data={
+            "kind": "question_report",
+            "player": gp.user.username,
+            "question_id": qid,
+            "choice": idx,
+            "correct": q.get("correct", None),
+            "ask_token": str(asked.token),
+        },
+    )
 
     return JsonResponse({"status": "ok", "correct": is_correct})

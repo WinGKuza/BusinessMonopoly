@@ -7,6 +7,7 @@
     window.gameId = "{{ game.id }}";
     window.csrfToken = "{{ csrf_token }}";
     window.isObserver = {{ player.is_observer|yesno:"true,false" }};
+    window.paused = {{ is_paused|yesno:"true,false" }};
 </script>
 
 <div style="max-width: 800px; margin: auto; padding: 20px; background-color: #f8f9fa; border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,0.1); position: relative;">
@@ -67,18 +68,17 @@
         <p>Влияние: <span id="player-influence">{{ player.influence }} ⭐</span></p>
         <p>Роль: <span id="player-role">{{ player.get_role_display }}</span></p>
         <div style="display: flex; gap: 10px; margin-top: 15px;">
-            <button onclick="document.getElementById('transfer-form').style.display='block'"
+            <button data-pause onclick="toggleDisplay('transfer-form')"
                 style="flex: 1; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
                 💱 Перевести
             </button>
 
-            {% if player.special_role == 0 and player.role < 3 %}
-            <button id="upgrade-role-button"
-                style="flex: 1; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
+            <button data-pause id="upgrade-role-button"
+                style="{% if player.special_role != 0 or player.role > 2 %}display:none;{% endif %} flex: 1; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
                 ⬆️ Улучшить роль
             </button>
-            {% endif %}
         </div>
+
         <form id="transfer-form" style="display:none; margin-top: 10px;">
             {% csrf_token %}
             <select id="receiver" name="receiver" required>
@@ -91,52 +91,60 @@
             <input type="number" id="amount" name="amount" min="1" placeholder="Сумма" required style="width: 100px;">
             <button type="submit" style="padding: 4px 12px;">OK</button>
         </form>
-    </div>
 
-    <div id="election-block" style="display:none; margin-top: 10px;">
-        <button id="reelect-button"
+        <div id="election-block" style="display:none; margin-top: 10px;">
+        <button data-pause id="reelect-button"
                 data-vote-url="{% url 'vote_for_official' game.id %}"
                 style="flex: 1; width: 100%; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
                 🔄 Переизбрать Политика
         </button>
-    </div>
-
-    {% if player.special_role == 2 %}
-    <button id="ask-question-button"
-            style="flex: 1; margin-top: 10px; width: 100%; padding: 10px 0; font-size: 16px; background-color: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer;">
-        ❓ Задать вопрос
-    </button>
-
-    <div id="ask-question-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:3000; align-items:center; justify-content:center;">
-      <div style="background:#fff; padding:16px; border-radius:8px; width:360px;">
-        <h3 style="margin-top:0;">Кому задать вопрос?</h3>
-        <select id="ask-target" style="width:100%; padding:6px 8px;">
-          {% for gp in players %}
-            {% if not gp.is_observer and gp.user != request.user %}
-              <option value="{{ gp.id }}">{{ gp.user.username }}</option>
-            {% endif %}
-          {% endfor %}
-        </select>
-        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px;">
-          <button id="ask-cancel">Отмена</button>
-          <button id="ask-send">Отправить</button>
         </div>
-      </div>
-    </div>
-    {% endif %}
 
-    <div id="election-modal"
-         style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-                background:rgba(0,0,0,.5); justify-content:center; align-items:center; z-index: 2000;">
-      <div style="background:#fff; padding:20px; border-radius:8px; max-width:400px; width:100%;">
-          <h3>Выберите кандидата</h3>
-          <div id="election-list"></div>
-          <div id="election-empty" style="display:none; color:#888;">Нет кандидатов</div>
-          <div style="margin-top:15px; display:flex; gap:10px; justify-content:flex-end;">
-              <button id="election-cancel">Отмена</button>
-              <button id="election-submit">Голосовать</button>
+        <button data-pause id="ask-question-button"
+                style="{% if player.special_role != 2 %}display:none;{% endif %} width:100%; margin-top:10px; padding:10px 0; font-size:16px; background-color:#6f42c1; color:#fff; border:none; border-radius:6px; cursor:pointer;">
+          ❓ Задать вопрос
+        </button>
+
+        <div id="ask-question-modal"
+             style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:3000;
+                    align-items:center; justify-content:center;">
+          <div style="background:#fff; padding:16px; border-radius:8px; width:360px;">
+            <h3 style="margin:0 0 10px 0;">Задать вопрос</h3>
+
+            <label for="ask-question-id" style="display:block; margin-bottom:6px;">№ вопроса (пусто = случайный)</label>
+            <input id="ask-question-id" type="number" min="1" step="1" placeholder="например, 1"
+                   style="width:100%; padding:6px 8px; border:1px solid #ccc; border-radius:6px; margin-bottom:12px;">
+
+            <h4 style="margin:0 0 6px 0; font-size:14px; font-weight:600;">Кому задать?</h4>
+            <select id="ask-target" style="width:100%; padding:6px 8px; border:1px solid #ccc; border-radius:6px;">
+              {% for gp in players %}
+                {% if not gp.is_observer and gp.user_id != request.user.id %}
+                  <option value="{{ gp.id }}">{{ gp.user.username }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px;">
+              <button id="ask-cancel">Отмена</button>
+              <button id="ask-send" style="background:#2f71f5; color:#fff; border:none; padding:6px 12px; border-radius:6px; cursor:pointer;">Отправить</button>
+            </div>
           </div>
-      </div>
+        </div>
+
+
+        <div id="election-modal"
+             style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+                    background:rgba(0,0,0,.5); justify-content:center; align-items:center; z-index: 2000;">
+          <div style="background:#fff; padding:20px; border-radius:8px; max-width:400px; width:100%;">
+              <h3>Выберите кандидата</h3>
+              <div id="election-list"></div>
+              <div id="election-empty" style="display:none; color:#888;">Нет кандидатов</div>
+              <div style="margin-top:15px; display:flex; gap:10px; justify-content:flex-end;">
+                  <button id="election-cancel">Отмена</button>
+                  <button id="election-submit">Голосовать</button>
+              </div>
+          </div>
+        </div>
     </div>
 
     <!-- Список участников -->
@@ -189,6 +197,7 @@
         window.toggleMode = () => toggleMode(window.gameId, window.csrfToken);
         window.deleteGame = () => deleteGame(window.gameId, window.csrfToken, "{% url 'create_game' %}");
         window.leaveGame = () => leaveGame(window.gameId, window.csrfToken, "{% url 'game_list' %}");
+        applyPauseToButtons(!!window.paused);
     });
 </script>
 
