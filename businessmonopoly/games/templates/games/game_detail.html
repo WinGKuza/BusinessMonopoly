@@ -8,6 +8,7 @@
     window.csrfToken = "{{ csrf_token }}";
     window.isObserver = {{ player.is_observer|yesno:"true,false" }};
     window.paused = {{ is_paused|yesno:"true,false" }};
+    window.currentUserIsPolitician = !!window.currentUserIsPolitician;
 </script>
 
 <div style="max-width: 800px; margin: auto; padding: 20px; background-color: #f8f9fa; border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,0.1); position: relative;">
@@ -31,6 +32,11 @@
 
                 <button id="mode-toggle-button" onclick="toggleMode()" style="background-color: #6c757d; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%; margin-top: 10px;">
                     {% if player.is_observer %}Режим игрока{% else %}Режим наблюдателя{% endif %}
+                </button>
+
+                <button onclick="startElectionEarly()"
+                        style="background-color: #fd7e14; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%; margin-top: 10px;">
+                  🚀 Начать выборы досрочно
                 </button>
 
                 <button onclick="deleteGame()" style="background-color: #ff4d4f; color: white; padding: 6px 10px; border: none; border-radius: 4px; width: 100%; margin-top: 10px;">
@@ -68,7 +74,7 @@
         <p>Влияние: <span id="player-influence">{{ player.influence }} ⭐</span></p>
         <p>Роль: <span id="player-role">{{ player.get_role_display }}</span></p>
         <div style="display: flex; gap: 10px; margin-top: 15px;">
-            <button data-pause onclick="toggleDisplay('transfer-form')"
+            <button data-pause data-toggle="transfer"
                 style="flex: 1; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
                 💱 Перевести
             </button>
@@ -147,6 +153,18 @@
         </div>
     </div>
 
+    <div id="banker-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); align-items:center; justify-content:center; z-index:1000;">
+      <div style="background:#fff; border-radius:10px; padding:16px; width:420px; max-width:90vw;">
+        <h3 style="margin:0 0 10px 0;">Выберите Банкира</h3>
+        <div id="banker-empty" style="display:none; color:#6c757d;">Нет доступных кандидатов</div>
+        <div id="banker-list" style="display:flex; flex-direction:column; gap:6px; max-height:50vh; overflow:auto;"></div>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+          <button id="banker-cancel" type="button">Отмена</button>
+          <button id="banker-submit" type="button">Назначить</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Список участников -->
     <h3 style="text-align: center; margin-top: 20px;">Участники</h3>
     <div id="players-list">
@@ -165,10 +183,11 @@
     </div>
 </div>
 
+
+
 <script type="module">
     import { initWebSocket } from "{% static 'js/game-websocket.js' %}";
     initWebSocket("{{ game.id }}", "{{ request.user.username }}");
-
 </script>
 
 <script type="module">
@@ -182,19 +201,26 @@
         upgradeRole,
         initElectionUI,
         initPoliticianQuestions,
+        startElectionEarly,
+        initBankerSelectionUI,
+        bindTransferToggle,
     } from "{% static 'js/game-actions.js' %}";
+    import { applyPauseToButtons } from "{% static 'js/ui-utils.js' %}";
 
     document.addEventListener("DOMContentLoaded", () => {
         if (!window.isObserver) {
             submitTransfer(window.gameId, window.csrfToken);
             submitSettings(window.gameId, window.csrfToken);
             upgradeRole(window.gameId, window.csrfToken);
+            bindTransferToggle();
             initPoliticianQuestions(window.gameId, window.csrfToken);
+            initBankerSelectionUI(window.gameId, window.csrfToken);
         }
 
         initElectionUI("{{ request.user.username }}");
         window.togglePause = () => togglePause(window.gameId, window.csrfToken);
         window.toggleMode = () => toggleMode(window.gameId, window.csrfToken);
+        window.startElectionEarly = () => startElectionEarly(window.gameId, window.csrfToken);
         window.deleteGame = () => deleteGame(window.gameId, window.csrfToken, "{% url 'create_game' %}");
         window.leaveGame = () => leaveGame(window.gameId, window.csrfToken, "{% url 'game_list' %}");
         applyPauseToButtons(!!window.paused);

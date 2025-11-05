@@ -3,7 +3,7 @@ import json
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse, HttpResponse, HttpResponseForbidden
 from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
@@ -14,7 +14,7 @@ from asgiref.sync import async_to_sync
 
 from .votes import VoteService
 from .forms import GameCreateForm, GameSettingsForm
-from .models import Game, GamePlayer
+from .models import Game, GamePlayer, PendingAnswer, AskedQuestion
 from .realtime import send_game_update, send_personal_message, broadcast_personal_to_game
 from .questions import load_questions
 
@@ -43,7 +43,7 @@ def assign_initial_role_and_resources(game_player):
         game_player.role = 3  # Предприниматель
     else:
         game_player.role = 1  # Безработный
-    game_player.money = 10000
+    game_player.money = 300
     game_player.influence = 0
     game_player.save()
 
@@ -92,7 +92,7 @@ def upgrade_role(request, game_id):
     if player.special_role != 0:
         return JsonResponse({'error': 'Вы не можете улучшать специальную роль'}, status=400)
 
-    if player.role == 1:
+    if player.role == 1: #TODO Сделать выбор или то или то
         if player.money >= 500:
             player.money -= 500
         elif player.influence >= 3:
@@ -263,20 +263,32 @@ def vote_for_official(request, game_id):
     return JsonResponse({"status": "ok"})
 
 @login_required
-@pause_protected
-def appoint_banker(request, game_id, player_id):
-    game = get_object_or_404(Game, id=game_id)
-    if game.state_official != request.user.playerprofile:
-        messages.error(request, 'Только гос. деятель может назначать банкира.')
-        return JsonResponse({'status': 'ok'})
+@require_POST
+def choose_banker(request, game_id: int):
+    game = get_object_or_404(Game, pk=game_id)
 
-    target_gp = get_object_or_404(GamePlayer, id=player_id, game=game)
-    target_gp.role = 4
-    target_gp.save()
+    # только текущий Политик
+    if not game.is_politician(request.user):
+        return HttpResponseForbidden("Только Политик может назначать Банкира")
 
-    send_game_update(game.id)
-    messages.success(request, f'{target_gp.user.username} назначен банкиром.')
-    return JsonResponse({'status': 'ok'})
+    try:
+        payload = json.loads(request.body or "{}")
+        banker_gp_id = int(payload.get("banker_id"))
+    except Exception:
+        return JsonResponse({"error": "Некорректный payload"}, status=400)
+
+    banker_gp = get_object_or_404(
+        GamePlayer,
+        pk=banker_gp_id, game=game,
+        is_active=True, is_observer=False,
+    )
+
+    # нельзя назначить игрока со спец-ролью (уже Политик/Банкир)
+    if banker_gp.special_role in (1, 2):
+        return JsonResponse({"error": "Игрок уже имеет спец-роль"}, status=400)
+
+    game.set_banker(banker_gp)
+    return JsonResponse({"status": "ok", "banker_id": banker_gp.id})
 
 @login_required
 def delete_game(request, game_id):
@@ -505,7 +517,6 @@ def ask_question(request, game_id):
     return JsonResponse({"status": "ok"})
 
 
-
 @login_required
 @require_POST
 @pause_protected
@@ -516,18 +527,17 @@ def answer_question(request, game_id):
     try:
         payload = json.loads(request.body.decode("utf-8"))
         qid = int(payload.get("question_id"))
-        idx = int(payload.get("choice_index"))
-        ask_token = payload.get("ask_token")  # <== новый параметр
+        idx = payload.get("choice_index")  # может быть None
+        ask_token = payload.get("ask_token")  # <== есть в твоём коде
+        free_text = (payload.get("answer_text") or "").strip()  # НОВОЕ: для ручных/свободных
     except Exception:
         return JsonResponse({"error": "Неверные данные"}, status=400)
 
     # найдём карточку вопроса
-    from .models import AskedQuestion
     asked: AskedQuestion | None = None
     if ask_token:
         asked = AskedQuestion.objects.filter(game=game, token=ask_token).first()
     if not asked:
-        # fallback: последняя «открытая» карточка для этого игрока и вопроса
         asked = (AskedQuestion.objects
                  .filter(game=game, target=gp, question_id=qid, answered=False)
                  .order_by('-created_at')
@@ -540,74 +550,324 @@ def answer_question(request, game_id):
     if asked.answered:
         return JsonResponse({"error": "Ответ уже принят."}, status=400)
 
-    # проверка варианта
+    # загружаем вопрос
     questions = load_questions("ru")
     q = next((item for item in questions if int(item.get("id")) == qid), None)
     if not q:
         return JsonResponse({"error": "Вопрос не найден."}, status=404)
 
     choices = q.get("choices") or q.get("options") or []
-    if not (0 <= idx < len(choices)):
+    reward = (q.get("reward") or {})
+    reward_money = int(reward.get("money") or 0)
+    reward_infl  = int(reward.get("influence") or 0)
+
+    # --- ветка 1: ручной вопрос (correct is None) ---
+    if q.get("correct", None) is None:
+        # берём текст ответа: либо выбранный вариант (если варианты вдруг есть),
+        # либо свободный текст
+        if choices and idx is not None:
+            try:
+                idx = int(idx)
+                if not (0 <= idx < len(choices)):
+                    return JsonResponse({"error": "Некорректный вариант."}, status=400)
+                answer_text = str(choices[idx])
+            except Exception:
+                return JsonResponse({"error": "Некорректный вариант."}, status=400)
+        else:
+            # свободный ответ обязателен
+            if not free_text:
+                return JsonResponse({"error": "Ответ пустой."}, status=400)
+            answer_text = free_text
+
+        # создаём ожидающий ручного решения ответ
+        PendingAnswer.objects.create(
+            game=game,
+            player=gp,
+            question_id=qid,
+            answer_text=answer_text,
+            status="pending",
+        )
+
+        # НЕ закрываем asked сразу — пусть висит до решения
+        # (если хочешь — можешь пометить asked.answer_choice = None, но не answered=True)
+
+        # игроку — квитанция
+        send_personal_message(
+            gp.user_id,
+            "Ответ отправлен. Ожидайте решения Политика.",
+            level="info",
+            extra_data={
+                "kind": "question_result",
+                "question_id": qid,
+                "your_choice": None,
+                "correct": None,
+            },
+        )
+
+        # политикам — напоминание о ревью
+        for pol in GamePlayer.objects.filter(game=game, special_role=2, is_active=True):
+            send_personal_message(
+                pol.user_id,
+                f"Новый ответ по вопросу №{qid} от {gp.user.username}.",
+                level="info",
+                extra_data={
+                    "kind": "question_review",
+                    "question_id": qid,
+                    "player_username": gp.user.username,
+                    "answer_text": answer_text,
+                    "ask_token": str(asked.token),
+                }
+            )
+
+        return JsonResponse({"status": "ok", "pending": True})
+
+    # --- ветка 2: авто-вопрос (есть correct) ---
+    if not choices:
+        return JsonResponse({"error": "У вопроса нет вариантов."}, status=400)
+    try:
+        idx = int(idx)
+        if not (0 <= idx < len(choices)):
+            return JsonResponse({"error": "Некорректный вариант."}, status=400)
+    except Exception:
         return JsonResponse({"error": "Некорректный вариант."}, status=400)
 
-    has_correct = "correct" in q
-    is_correct = None
-    if has_correct:
-        try:
-            is_correct = (idx == int(q["correct"]))
-        except Exception:
-            is_correct = None
+    # correct может быть индексом или значением; поддержим оба
+    correct_raw = q.get("correct")
+    if isinstance(correct_raw, int):
+        is_correct = (idx == correct_raw)
+        correct_for_report = correct_raw
+    else:
+        # строка/значение — сравниваем по тексту
+        is_correct = (str(choices[idx]) == str(correct_raw))
+        # для отчёта отдадим само значение
+        correct_for_report = correct_raw
 
-    # закрываем карточку
+    # закрываем карточку (для авто-вопроса)
     asked.answered = True
     asked.answer_choice = idx
     asked.is_correct = is_correct
     asked.save(update_fields=["answered", "answer_choice", "is_correct"])
 
-    # Игроку — локальный фидбэк (через WS персоналку)
-    msg = "Ответ принят."
-    level = "info"
-    if is_correct is True:
-        msg = "Верно! 🎉"; level = "success"
-    elif is_correct is False:
-        msg = "Неверно.";  level = "warning"
-
-    send_personal_message(
-        gp.user_id,
-        msg,
-        level=level,
-        extra_data={
-            "kind": "question_result",
-            "question_id": qid,
-            "your_choice": idx,
-            "correct": q.get("correct", None),
-        },
-    )
-
-    # Отправителю (Политику) — отчёт по его вопросу
-    # даже если роль уже сменилась, отчёт уйдёт именно тому, кто отправил
-    polis_user_id = asked.asked_by.user_id
-    report_level = "success" if is_correct else "warning" if is_correct is False else "info"
-    report_msg = f"{gp.user.username} ответил на ваш вопрос №{qid}: "
-    if is_correct is True:
-        report_msg += "верно."
-    elif is_correct is False:
-        report_msg += "неверно."
+    # игроку — локальный фидбэк
+    if is_correct:
+        grant_reward(gp, money=reward_money, influence=reward_infl, reason=f"Правильный ответ #{qid}")
+        send_game_update(game.id)
+        send_personal_message(
+            gp.user_id,
+            "Верно! 🎉",
+            level="success",
+            extra_data={"kind": "question_result", "question_id": qid, "your_choice": idx, "correct": correct_for_report},
+        )
     else:
-        report_msg += f"выбрана опция {idx}."
+        send_personal_message(
+            gp.user_id,
+            "Неверно.",
+            level="warning",
+            extra_data={"kind": "question_result", "question_id": qid, "your_choice": idx, "correct": correct_for_report},
+        )
 
+    # Отчёт Политику, который задавал этот конкретный вопрос
+    polis_user_id = asked.asked_by.user_id
     send_personal_message(
         polis_user_id,
-        report_msg,
-        level=report_level,
+        f"{gp.user.username} ответил на ваш вопрос №{qid}: {'верно' if is_correct else 'неверно'}.",
+        level="success" if is_correct else "warning",
         extra_data={
             "kind": "question_report",
             "player": gp.user.username,
             "question_id": qid,
             "choice": idx,
-            "correct": q.get("correct", None),
+            "correct": correct_for_report,
             "ask_token": str(asked.token),
         },
     )
 
-    return JsonResponse({"status": "ok", "correct": is_correct})
+    return JsonResponse({"status": "ok", "correct": bool(is_correct)})
+
+
+def grant_reward(target_gp: GamePlayer, money: int = 0, influence: int = 0, reason: str = ""):
+    if not money and not influence:
+        return
+    with transaction.atomic():
+        gp = GamePlayer.objects.select_for_update().get(pk=target_gp.pk)
+        gp.money += int(money)
+        gp.influence += int(influence)
+        gp.save(update_fields=["money", "influence"])
+    send_game_update(gp.game_id)
+    msg = f"Награда: +{money} 💰, +{influence} ⭐"
+    if reason:
+        msg = f"{reason}. {msg}"
+    send_personal_message(gp.user_id, msg, "success")
+
+
+@login_required
+@require_POST
+@pause_protected
+def grade_pending_answer(request, game_id):
+    from django.utils import timezone
+    from .models import Game, GamePlayer, AskedQuestion, PendingAnswer
+
+    game = get_object_or_404(Game, id=game_id)
+    reviewer_gp = get_object_or_404(GamePlayer, game=game, user=request.user)
+
+    # Разрешим только Политику
+    if reviewer_gp.special_role != 2:
+        return JsonResponse({"error": "Только Политик может принимать решения."}, status=403)
+
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return JsonResponse({"error": "Неверный JSON"}, status=400)
+
+    approved   = payload.get("approved")
+    ask_token  = payload.get("ask_token")
+    qid_raw    = payload.get("question_id")
+    pid_raw    = payload.get("player_id")  # опционально
+
+    # нормализуем approved -> bool
+    if isinstance(approved, str):
+        approved = approved.lower() in ("1", "true", "yes", "y")
+    approved = bool(approved)
+
+    # question_id (опц.)
+    qid = None
+    if qid_raw is not None:
+        try:
+            qid = int(qid_raw)
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Некорректный question_id"}, status=400)
+
+    # 1) Основной путь — ищем по ask_token
+    asked = None
+    if ask_token:
+        asked = AskedQuestion.objects.filter(game=game, token=ask_token).first()
+        if not asked:
+            return JsonResponse({"error": "Карточка вопроса не найдена по токену."}, status=404)
+        # извлекаем адресата
+        target_gp = asked.target
+        if qid is None:
+            qid = asked.question_id
+    else:
+        # 2) Фолбэк — по player_id + question_id (если прислали)
+        if pid_raw is None or qid is None:
+            return JsonResponse({"error": "Нужен ask_token или (player_id и question_id)."}, status=400)
+        try:
+            player_id = int(pid_raw)
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Некорректный player_id"}, status=400)
+
+        target_gp = get_object_or_404(GamePlayer, id=player_id, game=game, is_active=True)
+        asked = (AskedQuestion.objects
+                 .filter(game=game, target=target_gp, question_id=qid)
+                 .order_by('-created_at').first())
+        if not asked:
+            return JsonResponse({"error": "Карточка вопроса не найдена."}, status=404)
+
+    # Находим «ожидающий» ответ, если это ручной вопрос (correct == null)
+    pending = (PendingAnswer.objects
+               .filter(game=game, player=target_gp, question_id=qid, status="pending")
+               .order_by('-created_at')
+               .first())
+    if not pending:
+        # Может быть уже обработан, или вопрос авто-проверяемый
+        return JsonResponse({"error": "Нет ожидающего решения ответа."}, status=404)
+
+    # Применяем решение
+    pending.status = "approved" if approved else "rejected"
+    pending.decided_at = timezone.now()
+    pending.decided_by = request.user
+    pending.save(update_fields=["status", "decided_at", "decided_by"])
+
+    # Выдаём награду только при approved
+    if approved:
+        # Возьмём награду из questions.json (если есть), иначе дефолт
+        from .questions import load_questions
+        qs = load_questions("ru")
+        spec = next((x for x in qs if int(x.get("id", -1)) == qid), None) or {}
+        reward = spec.get("reward") or {}
+        money = int(reward.get("money") or 0)
+        infl  = int(reward.get("influence") or 0)
+
+        if money or infl:
+            # фиксируем баланс под транзакцию на всякий случай
+            with transaction.atomic():
+                tgt_locked = GamePlayer.objects.select_for_update().get(pk=target_gp.pk)
+                tgt_locked.money += money
+                tgt_locked.influence += infl
+                tgt_locked.save(update_fields=["money", "influence"])
+            # пушим игроку уведомление
+            parts = []
+            if money: parts.append(f"+{money} ₽")
+            if infl:  parts.append(f"+{infl} ⭐")
+            send_personal_message(
+                target_gp.user_id,
+                f"Ваш ответ принят. Награда: {' и '.join(parts)}",
+                level="success",
+            )
+        else:
+            # награда не задана — просто уведомим
+            send_personal_message(
+                target_gp.user_id,
+                "Ваш ответ принят.",
+                level="success",
+            )
+    else:
+        send_personal_message(
+            target_gp.user_id,
+            "Ваш ответ отклонён.",
+            level="warning",
+        )
+
+    # Автору вопроса (Политику) — подтверждение
+    send_personal_message(
+        asked.asked_by.user_id,
+        f"Решение по ответу игрока {target_gp.user.username} на вопрос №{qid}: "
+        + ("одобрено" if approved else "отклонено"),
+        level=("success" if approved else "warning"),
+        extra_data={
+            "kind": "question_review_result",
+            "question_id": qid,
+            "player": target_gp.user.username,
+            "approved": approved,
+            "ask_token": str(asked.token),
+        },
+    )
+
+    # Обновим общий стейт на клиенте (балансы и т.п.)
+    send_game_update(game.id)
+
+    return JsonResponse({"status": "ok", "approved": approved})
+
+
+
+@login_required
+@require_POST
+def start_election_early(request, game_id: int):
+    game = get_object_or_404(Game, pk=game_id)
+
+    # ТОЛЬКО создатель игры или суперюзер
+    if not (request.user.is_superuser or game.creator_id == request.user.id):
+        return HttpResponseForbidden("Недостаточно прав")
+
+    # Если уже идёт голосование — просто отвечаем «уже идёт»
+    if getattr(game, "is_voting", False):
+        return JsonResponse({"status": "already_running"}, status=200)
+
+    # Старт выборов немедленно
+    game.start_election()
+
+    # (опционально) уведомления по WS
+    try:
+        from .realtime import broadcast_personal_to_game, send_game_update
+        broadcast_personal_to_game(
+            game.id,
+            "Создатель игры запустил досрочные выборы.",
+            level="info",
+            include_observers=True,
+            extra_data={"reason": "manual_start", "at": timezone.now().isoformat()},
+        )
+        send_game_update(game.id)
+    except Exception:
+        pass
+
+    return JsonResponse({"status": "ok"})

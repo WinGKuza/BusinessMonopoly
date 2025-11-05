@@ -1,5 +1,5 @@
 import uuid
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
@@ -66,28 +66,105 @@ class Game(models.Model):
         VoteService.start_election_for_game(self, started_at=self.voting_started_at)
         logger.info("[ELECTION] START game=%s at=%s", self.id, self.voting_started_at)
 
-    def end_election(self):
+    def end_election(self, force_result: str | None = None):
         if not self.is_voting:
             return
 
         from .votes import VoteService
+        from .models import VoteSession, VoteBallot, GamePlayer
+        from .realtime import broadcast_personal_to_game, send_game_update
 
+        # Если прилетел форс-таймаут — не даём сервису «рисовать победителя»
+        if force_result == "timeout":
+            session = (VoteSession.objects
+                       .filter(game=self, kind=VoteSession.KIND_ELECTION, is_active=True)
+                       .first())
+            if session:
+                session.meta = {**(session.meta or {}), "last_result": "timeout"}
+                session.close()
+
+            # закрываем флаги игры
+            self.is_voting = False
+            self.last_election_time = timezone.now()
+            self.voting_paused_at = None
+            self.voting_total_paused_seconds = 0
+            self.save(
+                update_fields=["is_voting", "last_election_time", "voting_paused_at", "voting_total_paused_seconds"])
+
+            broadcast_personal_to_game(
+                self.id,
+                "Время голосования истекло. Перезапускаем выборы…",
+                level="warning",
+                include_observers=True,
+                extra_data={"reason": "timeout"},
+            )
+            self.start_election()
+            send_game_update(self.id)
+            return
+
+        # Обычный путь — даём сервису подвести итоги
         winner_gp = None
         try:
             winner_gp = VoteService.finish_force(self)
         except Exception:
             logger.exception("[ELECTION] finish_force failed game=%s", self.id)
 
-        # Победитель есть -> снимаем старых политиков и назначаем нового
+        last_session = (VoteSession.objects
+                        .filter(game=self)
+                        .order_by("-started_at")
+                        .first())
+        last_meta = (last_session.meta or {}) if last_session else {}
+        last_result = last_meta.get("last_result")  # winner/tie/timeout/no_votes/None
+
+        # Закрываем флаги игры
+        self.is_voting = False
+        self.last_election_time = timezone.now()
+        self.voting_paused_at = None
+        self.voting_total_paused_seconds = 0
+        self.save(update_fields=["is_voting", "last_election_time", "voting_paused_at", "voting_total_paused_seconds"])
+
+        # === КРИТИЧЕСКОЕ: проверка «все ли проголосовали» ДО назначения победителя ===
+        expected = GamePlayer.objects.filter(game=self, is_active=True, is_observer=False).count()
+        ballots = 0
+        if last_session:
+            ballots = (VoteBallot.objects
+                       .filter(session=last_session)
+                       .values("voter_id").distinct().count())
+
+        if ballots < expected:
+            broadcast_personal_to_game(
+                self.id,
+                "Недостаточно голосов. Перезапускаем выборы…",
+                level="warning",
+                include_observers=True,
+                extra_data={"reason": "not_enough_votes", "expected": expected, "got": ballots},
+            )
+            self.start_election()
+            send_game_update(self.id)
+            return
+        # === /КРИТИЧЕСКОЕ ===
+
+        # 1) Таймаут (если вдруг сервис его оставил) -> перезапуск
+        if last_result == "timeout":
+            broadcast_personal_to_game(
+                self.id,
+                "Время голосования истекло. Перезапускаем выборы…",
+                level="warning",
+                include_observers=True,
+                extra_data={"reason": "timeout"},
+            )
+            self.start_election()
+            send_game_update(self.id)
+            return
+
+        # 2) Есть победитель -> назначаем и выходим
         if winner_gp is not None:
-            # сбросим у всех остальных (исключим победителя, чтобы не дергать его лишний раз)
-            GamePlayer.objects.filter(game=self, special_role=2).exclude(pk=winner_gp.pk).update(special_role=0)
+            GamePlayer.objects.filter(game=self, special_role=2) \
+                .exclude(pk=winner_gp.pk).update(special_role=0)
             if winner_gp.special_role != 2:
                 winner_gp.special_role = 2
                 winner_gp.save(update_fields=["special_role"])
 
-            # Объявление
-            from .realtime import broadcast_personal_to_game
             broadcast_personal_to_game(
                 self.id,
                 f"«{winner_gp.user.username}» — новый Политик! 🎉",
@@ -95,26 +172,117 @@ class Game(models.Model):
                 extra_data={"winner_player_id": winner_gp.id, "role": "Политик"},
                 include_observers=True,
             )
-        else:
-            # Победителя нет (нет бюллетеней / всё занулено) — никого не трогаем
-            from .realtime import broadcast_personal_to_game
+            self.start_banker_selection(winner_gp)
+            send_game_update(self.id)
+            return
+
+        # 3) Ничья -> перезапуск
+        if last_result == "tie":
             broadcast_personal_to_game(
                 self.id,
-                "Голосование завершено. Победитель не определён.",
+                "Ничья. Перезапускаем выборы…",
                 level="warning",
-                extra_data={"reason": "no_votes"},
                 include_observers=True,
+                extra_data={"reason": "tie"},
             )
+            self.start_election()
+            send_game_update(self.id)
+            return
 
-        # Закрываем раунд
-        self.is_voting = False
-        self.last_election_time = timezone.now()
-        self.voting_paused_at = None
-        self.voting_total_paused_seconds = 0
-        self.save(update_fields=[
-            "is_voting", "last_election_time", "voting_paused_at", "voting_total_paused_seconds"
-        ])
-        logger.info("[ELECTION] END   game=%s at=%s", self.id, self.last_election_time)
+        # 4) Все проголосовали, но уникального лидера нет -> крутим дальше
+        broadcast_personal_to_game(
+            self.id,
+            "Победитель не определён. Перезапускаем выборы…",
+            level="warning",
+            include_observers=True,
+            extra_data={"reason": "no_winner_all_voted"},
+        )
+        self.start_election()
+        send_game_update(self.id)
+
+    @transaction.atomic
+    def set_banker(self, banker_gp):
+        """Назначить Банкира (special_role=1). С прежнего банкира снять спец-роль."""
+        from .models import GamePlayer
+        # снять у прежнего банкира
+        GamePlayer.objects.filter(game=self, special_role=1).update(special_role=0)
+        # назначить нового
+        banker_gp.special_role = 1  # 1 = Банкир
+        banker_gp.save(update_fields=["special_role"])
+
+        # оповещения/обновление UI
+        try:
+            from .realtime import broadcast_personal_to_game, send_game_update
+            broadcast_personal_to_game(
+                self.id,
+                f"Назначен Банкир: {banker_gp.user.username}",
+                level="info",
+                include_observers=True,
+                extra_data={"event": "banker_assigned", "banker_id": banker_gp.id},
+            )
+            send_game_update(self.id)
+        except Exception:
+            pass
+
+    def is_politician(self, user) -> bool:
+        """Пользователь — текущий Политик этой игры? (special_role=2)"""
+        from .models import GamePlayer
+        if not user or not user.is_authenticated:
+            return False
+        return GamePlayer.objects.filter(game=self, user=user, special_role=2).exists()
+
+    def start_banker_selection(self, politician_gp):
+        """
+        Попросить фронт ВЫБРАТЬ Банкира — только у текущего политика.
+        Всем остальным отправим событие, чтобы скрыть любой старый UI выбора.
+        """
+        from .models import GamePlayer
+        from .realtime import broadcast_personal_to_game, send_game_update
+        from .realtime import send_personal_message  # если у вас в том же модуле
+
+        candidates = list(
+            GamePlayer.objects
+            .filter(game=self, is_active=True, is_observer=False, special_role__in=[0, 1])
+            .values("id", username=models.F("user__username"))
+        )
+
+        for pol in GamePlayer.objects.filter(game=self, special_role=2, is_active=True):
+            send_personal_message(
+                pol.user_id,
+                "Политик должен выбрать Банкира.",
+                level="info",
+                extra_data={
+                    "kind": "banker_selection_started",
+                    "candidates": candidates,
+                },
+            )
+        '''
+        # Скрыть возможные старые модалки у всех
+        try:
+            broadcast_personal_to_game(
+                self.id,
+                None,
+                level="info",
+                include_observers=True,
+                extra_data={"event": "banker_selection_hide"},
+            )
+        except Exception:
+            pass
+
+        # Новому политику показать выбор
+        try:
+            send_personal_message(
+                politician_gp.user_id,
+                "Выберите Банкира.",
+                level="info",
+                extra_data={"event": "banker_selection_started", "candidates": candidates},
+            )
+            send_game_update(self.id)
+        except Exception:
+            pass
+        '''
+
+
 
     def election_elapsed_seconds(self) -> int:
         #Сколько секунд прошло с начала голосования, без учёта паузы игры.
@@ -157,7 +325,7 @@ class GamePlayer(models.Model):
     game = models.ForeignKey(Game, related_name='game_players', on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='game_players', on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
-    money = models.IntegerField(default=10000)
+    money = models.IntegerField(default=300)
     influence = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
     is_observer = models.BooleanField(default=False)
@@ -264,3 +432,29 @@ class AskedQuestion(models.Model):
 
     def __str__(self):
         return f"Q#{self.question_id} {self.asked_by_id}->{self.target_id} ({'done' if self.answered else 'open'})"
+
+
+class PendingAnswer(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Ожидает решения"),
+        ("approved", "Одобрен"),
+        ("rejected", "Отклонён"),
+    ]
+    game = models.ForeignKey("games.Game", on_delete=models.CASCADE, related_name="pending_answers")
+    player = models.ForeignKey("games.GamePlayer", on_delete=models.CASCADE, related_name="pending_answers")
+    question_id = models.IntegerField()
+    answer_text = models.TextField()
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="pending")
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["game", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Q{self.question_id} by {self.player.user.username} [{self.status}]"

@@ -286,57 +286,186 @@ export function initElectionUI(currentUsername) {
 }
 
 
+
 export function initPoliticianQuestions(gameId, csrfToken) {
-  const btn = document.getElementById("ask-question-button");
-  if (!btn) return;
+  const askBtn   = document.getElementById("ask-question-button");
+  const modal    = document.getElementById("ask-question-modal");
+  if (!askBtn || !modal) return;
 
-  const modal = document.getElementById("ask-question-modal");
-  const sel = document.getElementById("ask-target");
-  const cancel = document.getElementById("ask-cancel");
-  const send = document.getElementById("ask-send");
+  const selTarget= document.getElementById("ask-target");
+  const inputId  = document.getElementById("ask-question-id");
+  const btnSend  = document.getElementById("ask-send");
+  const btnCancel= document.getElementById("ask-cancel");
 
-  btn.addEventListener("click", () => {
+  const open = () => { modal.style.display = "flex"; };
+  const close= () => { modal.style.display = "none"; };
+
+  askBtn.addEventListener("click", () => {
+    if (window.paused) { showMessage("Игра на паузе", "warning"); return; }
+    open();
+  });
+
+  btnCancel.addEventListener("click", close);
+
+  btnSend.addEventListener("click", async () => {
+    try {
+      const targetId = parseInt(selTarget.value, 10);
+      const qidRaw   = (inputId.value || "").trim();
+      const body = { target_player_id: targetId };
+      if (qidRaw) body.question_id = parseInt(qidRaw, 10);
+
+      const resp = await fetch(`/games/${gameId}/ask-question/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (resp.status === 204) { close(); return; }
+      let data = {}; try { data = await resp.json(); } catch {}
+      if (!resp.ok) throw new Error(data?.error || `Ошибка ${resp.status}`);
+
+      showMessage("Вопрос отправлен.", "success");
+      close();
+    } catch (e) {
+      showMessage(String(e?.message || e), "error");
+    }
+  });
+}
+
+export async function startElectionEarly(gameId, csrfToken) {
+    if (!confirm("Запустить выборы досрочно?")) return;
+
+    try {
+        const resp = await fetch(`/games/${gameId}/elections/start_early/`, {
+            method: "POST",
+            headers: {
+                "X-CSRFToken": csrfToken,
+                "X-Requested-With": "XMLHttpRequest"
+            }
+        });
+
+        // пробуем прочитать JSON, даже если не ok
+        let data = {};
+        try { data = await resp.json(); } catch (_) {}
+
+        if (!resp.ok) {
+            const msg = data.error || data.message || "Не удалось запустить выборы (нет прав или ошибка).";
+            if (typeof showMessage === "function") showMessage(msg, "error");
+            else alert(msg);
+            return;
+        }
+
+        if (data.status === "already_running") {
+            if (typeof showMessage === "function") showMessage("Голосование уже идёт.", "info");
+            else alert("Голосование уже идёт.");
+        } else {
+            if (typeof showMessage === "function") showMessage("Выборы запущены.", "success");
+            else alert("Выборы запущены.");
+        }
+    } catch (e) {
+        if (typeof showMessage === "function") showMessage("Сеть недоступна. Попробуйте ещё раз.", "error");
+        else alert("Сеть недоступна. Попробуйте ещё раз.");
+    } finally {
+        // аккуратно закрыть меню шестерёнки, если открыто
+        const menu = document.getElementById("settings-menu");
+        if (menu) menu.style.display = "none";
+    }
+}
+
+export function initBankerSelectionUI(gameId, csrfToken) {
+  const modal = document.getElementById("banker-modal");
+  const list = document.getElementById("banker-list");
+  const empty = document.getElementById("banker-empty");
+  const cancel = document.getElementById("banker-cancel");
+  const submit = document.getElementById("banker-submit");
+  if (!modal || !list || !cancel || !submit) return;
+
+  let selectedBankerId = null;
+
+  function openModal(candidates) {
+    list.innerHTML = "";
+    selectedBankerId = null;
+    if (!Array.isArray(candidates) || !candidates.length) {
+      empty.style.display = "block";
+    } else {
+      empty.style.display = "none";
+      candidates.forEach(c => {
+        const item = document.createElement("label");
+        item.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px;border:1px solid #dee2e6;border-radius:8px;cursor:pointer;margin-bottom:6px;";
+
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "banker";
+        radio.value = c.id;
+        radio.addEventListener("change", () => { selectedBankerId = c.id; });
+
+        const info = document.createElement("div");
+        const name = c.username || c["user__username"] || `#${c.id}`;
+        info.innerHTML = `<strong>${name}</strong>`;
+
+        item.appendChild(radio);
+        item.appendChild(info);
+        list.appendChild(item);
+      });
+    }
     modal.style.display = "flex";
-  });
-  cancel.addEventListener("click", () => {
-    modal.style.display = "none";
-  });
+  }
+  function closeModal() { modal.style.display = "none"; }
 
-  send.addEventListener("click", async () => {
-  const target = sel.value;
-  const qidInput = document.getElementById("ask-question-id");
-  const qidRaw = qidInput ? qidInput.value.trim() : "";
-  const payload = { target_player_id: parseInt(target, 10) };
-  if (qidRaw !== "") {
-    const qid = parseInt(qidRaw, 10);
-    if (!Number.isFinite(qid) || qid <= 0) {
-      if (typeof showMessage === "function") showMessage("Некорректный номер вопроса.", "warning");
+  // делаем доступными для вызова из WS
+  window.__openBankerSelection = openModal;
+  window.__closeBankerSelection = closeModal;
+  if (Array.isArray(window._bankerQueue)) {
+      while (_bankerQueue.length) {
+        const ev = _bankerQueue.shift();
+        if (ev.type === "open") openModal(ev.cands);
+        else if (ev.type === "close") closeModal();
+      }
+    }
+  cancel.addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+
+  submit.addEventListener("click", async () => {
+    if (!selectedBankerId) {
+      if (typeof showMessage === "function") showMessage("Выберите банкира.", "warning");
+      else alert("Выберите банкира.");
       return;
     }
-    payload.question_id = qid;  // <== отправляем номер
-  }
+    const prev = submit.textContent;
+    submit.disabled = true;
+    submit.textContent = "Отправка...";
+    try {
+      const res = await fetch(`/games/${gameId}/choose_banker/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify({ banker_id: selectedBankerId }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch {}
+      if (!res.ok) {
+        const msg = data.error || "Ошибка назначения банкира.";
+        if (typeof showMessage === "function") showMessage(msg, "error"); else alert(msg);
+      } else {
+        if (typeof showMessage === "function") showMessage("Банкир назначен.", "success");
+        closeModal();
+      }
+    } finally {
+      submit.disabled = false;
+      submit.textContent = prev;
+    }
+  });
+}
 
-  try {
-    const resp = await fetch(`/games/${gameId}/ask-question/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": csrfToken,
-        "X-Requested-With": "XMLHttpRequest",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (resp.status === 204) return;
-
-    let data = {};
-    try { data = await resp.json(); } catch {}
-    if (!resp.ok) throw new Error(data.error || "Ошибка");
-    if (typeof showMessage === "function") showMessage("Вопрос отправлен.", "success");
-  } catch (e) {
-    if (typeof showMessage === "function") showMessage(String(e.message || e), "error");
-  } finally {
-    modal.style.display = "none";
-  }
-});
+export function bindTransferToggle() {
+  const btn = document.querySelector('button[data-toggle="transfer"]');
+  if (!btn) return;
+  btn.addEventListener("click", () => window.toggleDisplay("transfer-form"));
 }

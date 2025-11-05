@@ -30,8 +30,18 @@ SECRET_KEY = os.getenv('SECRET_KEY', get_random_secret_key())
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+     '.trycloudflare.com',
+]
 
+CSRF_TRUSTED_ORIGINS = [
+    'https://sorted-hrs-tough-marathon.trycloudflare.com'
+]
+
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = True
 
 # Application definition
 

@@ -99,7 +99,10 @@ class VoteService:
         if game.election_remaining_seconds() > 0:
             return None  # ещё рано
 
-        return VoteService._finish_and_pick_winner(session)
+        session.meta = {**(session.meta or {}), "last_result": "timeout"}
+        session.save(update_fields=["meta"])
+        game.end_election()
+        return None
 
     @staticmethod
     @transaction.atomic
@@ -136,14 +139,17 @@ class VoteService:
         top = tally[0]['count']
         winners = [row['option_id'] for row in tally if row['count'] == top]
 
-        # tie-policy
-        tie_policy = session.meta.get('tie_policy', 'random')
-        if tie_policy == 'random' and len(winners) > 1:
-            from random import choice
-            winner_option_id = choice(winners)
-        else:
-            winner_option_id = winners[0]
+        if len(winners) > 1:
+            # НИЧЬЯ → помечаем и выходим без победителя
+            session.meta = {**(session.meta or {}), "last_result": "tie"}
+            session.save(update_fields=["meta"])
+            return None
 
+        # победитель один
+        winner_option_id = winners[0]
         winner_option = VoteOption.objects.get(pk=winner_option_id)
-        # target — это GamePlayer
+
+        session.meta = {**(session.meta or {}), "last_result": "winner", "winner_option_id": winner_option_id}
+        session.save(update_fields=["meta"])
+
         return winner_option.target
