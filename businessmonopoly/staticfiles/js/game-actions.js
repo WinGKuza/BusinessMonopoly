@@ -1,31 +1,39 @@
 // game-actions.js
 
 export function submitTransfer(gameId, csrfToken) {
-    const form = document.getElementById('transfer-form');
-    if (!form) return;
-    form.addEventListener('submit', function(event) {
-        event.preventDefault();
-        const receiver = form.receiver.value;
-        const amount = form.amount.value;
+  const form = document.getElementById("transfer-form");
+  if (!form) return;
 
-        fetch(`/games/${gameId}/transfer/`, {
-            method: "POST",
-            headers: {
-                "X-CSRFToken": csrfToken,
-                "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: `receiver_id=${receiver}&amount=${amount}`
-        }).then(res => res.json())
-          .then(data => {
-              if (data.status === "ok") {
-                  form.style.display = "none";
-                  form.reset();
-              } else {
-                  alert(data.error || "Ошибка перевода");
-              }
-          });
-    });
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    const receiver = form.receiver.value;
+    const amount = form.amount.value;
+    const source = form.source ? form.source.value : ""; // '' для не-банкира
+
+    const params = new URLSearchParams();
+    params.append("receiver", receiver);
+    params.append("amount", amount);
+    if (source) params.append("source", source);
+
+    fetch(`/games/${gameId}/transfer/`, {
+      method: "POST",
+      headers: {
+        "X-CSRFToken": csrfToken,
+        "X-Requested-With": "XMLHttpRequest",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.status === "ok") {
+          form.style.display = "none";
+          form.reset();
+        } else {
+          alert(data.error || "Ошибка перевода");
+        }
+      });
+  });
 }
 
 export function togglePause(gameId, csrfToken) {
@@ -425,7 +433,7 @@ export function initBankerSelectionUI(gameId, csrfToken) {
         if (ev.type === "open") openModal(ev.cands);
         else if (ev.type === "close") closeModal();
       }
-    } //Тут
+    }
   cancel.addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
 

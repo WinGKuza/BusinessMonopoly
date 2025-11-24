@@ -27,6 +27,8 @@ class Game(models.Model):
     voting_started_at = models.DateTimeField(null=True, blank=True)
     voting_paused_at = models.DateTimeField(null=True, blank=True)
     voting_total_paused_seconds = models.IntegerField(default=0)
+    state_balance = models.IntegerField(default=1000)
+    bank_balance = models.IntegerField(default=10000)
 
     # Пауза
     paused_at = models.DateTimeField(null=True, blank=True)
@@ -256,31 +258,7 @@ class Game(models.Model):
                     "candidates": candidates,
                 },
             )
-        '''
-        # Скрыть возможные старые модалки у всех
-        try:
-            broadcast_personal_to_game(
-                self.id,
-                None,
-                level="info",
-                include_observers=True,
-                extra_data={"event": "banker_selection_hide"},
-            )
-        except Exception:
-            pass
 
-        # Новому политику показать выбор
-        try:
-            send_personal_message(
-                politician_gp.user_id,
-                "Выберите Банкира.",
-                level="info",
-                extra_data={"event": "banker_selection_started", "candidates": candidates},
-            )
-            send_game_update(self.id)
-        except Exception:
-            pass
-        '''
 
 
 

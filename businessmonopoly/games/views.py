@@ -169,61 +169,78 @@ def update_game_settings(request, game_id):
     return redirect('game_detail', game_id=game.id)
 
 
-@require_POST
 @login_required
+@require_POST
 @pause_protected
 def transfer_money(request, game_id):
     game = get_object_or_404(Game, id=game_id)
-    sender = get_object_or_404(GamePlayer, game=game, user=request.user)
+    sender = get_object_or_404(GamePlayer, game=game, user=request.user, is_active=True)
+
     if sender.is_observer:
-        return JsonResponse({'status': 'error', 'error': 'Наблюдатель не может переводить деньги'})
+        return JsonResponse({"error": "Наблюдатель не может переводить деньги"}, status=400)
+
+    receiver_raw = request.POST.get("receiver")
+    amount_raw = request.POST.get("amount")
+    source = request.POST.get("source")  # "personal"/"bank" для банкира, может быть None
 
     try:
-        receiver_id = int(request.POST.get("receiver_id"))
-        amount = int(request.POST.get("amount"))
-    except (ValueError, TypeError):
-        return JsonResponse({"error": "Неверные данные"}, status=400)
+        amount = int(amount_raw)
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Некорректная сумма"}, status=400)
 
     if amount <= 0:
         return JsonResponse({"error": "Сумма должна быть положительной"}, status=400)
 
-    if sender.id == receiver_id:
+    if not receiver_raw:
+        return JsonResponse({"error": "Не указан получатель"}, status=400)
+
+    # --- разбираем получателя ---
+    receiver_kind = None  # "player" | "bank" | "gov"
+    target_player = None
+
+    if receiver_raw == "bank":
+        receiver_kind = "bank"
+    elif receiver_raw == "gov":
+        receiver_kind = "gov"
+    elif receiver_raw.startswith("p"):
+        receiver_kind = "player"
+        try:
+            target_id = int(receiver_raw[1:])
+        except ValueError:
+            return JsonResponse({"error": "Некорректный получатель"}, status=400)
+        target_player = get_object_or_404(
+            GamePlayer,
+            id=target_id,
+            game=game,
+            is_active=True,
+            is_observer=False,
+        )
+    else:
+        return JsonResponse({"error": "Некорректный получатель"}, status=400)
+
+    # Нельзя переводить себе самому (для player)
+    if receiver_kind == "player" and target_player.id == sender.id:
         return JsonResponse({"error": "Нельзя перевести деньги самому себе"}, status=400)
 
-    try:
-        receiver = GamePlayer.objects.get(id=receiver_id, game=game)
-    except GamePlayer.DoesNotExist:
-        return JsonResponse({"error": "Получатель не найден"}, status=400)
+    # дальше — внутренняя логика переводов
+    from .money import transfer_money as core_transfer
 
-    if receiver.is_observer:
-        return JsonResponse({"status": "error", "error": "Нельзя переводить наблюдателю"})
+    ok, msg = core_transfer(
+        game=game,
+        sender=sender,
+        receiver=target_player,
+        amount=amount,
+        receiver_kind=receiver_kind,
+        source=source,
+    )
 
-    if sender.money < amount:
-        return JsonResponse({"error": "Недостаточно средств"}, status=400)
+    if not ok:
+        return JsonResponse({"error": msg}, status=400)
 
-    with transaction.atomic():
-        sender = GamePlayer.objects.select_for_update().get(id=sender.id)
-        receiver = GamePlayer.objects.select_for_update().get(id=receiver.id)
-
-        sender.money -= amount
-        receiver.money += amount
-        sender.save()
-        receiver.save()
-
+    # Обновим состояние игры для всех
     send_game_update(game.id)
 
-    send_personal_message(
-        sender.user.id,
-        f"Вы перевели {amount} ₽ игроку {receiver.user.username}.",
-        "success"
-    )
-
-    send_personal_message(
-        receiver.user.id,
-        f"Вы получили {amount} ₽ от игрока {sender.user.username}.",
-        "success"
-    )
-    return JsonResponse({'status': 'ok'})
+    return JsonResponse({"status": "ok", "message": msg})
 
 
 
@@ -871,3 +888,5 @@ def start_election_early(request, game_id: int):
         pass
 
     return JsonResponse({"status": "ok"})
+
+

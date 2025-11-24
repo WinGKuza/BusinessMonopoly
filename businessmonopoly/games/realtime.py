@@ -24,6 +24,7 @@ def get_game_update_data(game_id):
             }
             for p in players
         ],
+        "bank_balance": game.bank_balance,
         "is_voting": game.is_voting,
         "paused": game.is_paused(),
         "election_remaining": game.election_remaining_seconds() if game.is_voting else 0,

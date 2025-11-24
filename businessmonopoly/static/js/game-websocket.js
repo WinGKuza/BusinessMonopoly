@@ -91,6 +91,11 @@ export function initWebSocket(gameId, currentUsername) {
         window.timer.setElapsed(update.elapsed_seconds);
       }
 
+      if (update.bank_balance !== undefined) {
+        const bankEl = document.getElementById("bank-balance");
+        if (bankEl) bankEl.textContent = update.bank_balance;
+      }
+
       // список игроков + собственная роль
       let self = null;
       if (Array.isArray(update.players)) {
@@ -114,10 +119,15 @@ export function initWebSocket(gameId, currentUsername) {
             playerList.appendChild(div);
           }
           if (receiverSelect && p.username !== currentUsername && !p.is_observer) {
-            const opt = document.createElement("option");
-            opt.value = p.id;
-            opt.textContent = p.username;
-            receiverSelect.appendChild(opt);
+            if (!p.is_observer &&
+                p.username !== currentUsername &&
+                Number(p.special_role ?? 0) !== 2) {
+
+              const opt = document.createElement("option");
+              opt.value = "p" + p.id;   // ВАЖНО: префикс "p"
+              opt.textContent = p.username;
+              receiverSelect.appendChild(opt);
+            }
           }
           if (p.username === currentUsername) {
             self = p;
@@ -128,6 +138,19 @@ export function initWebSocket(gameId, currentUsername) {
             }
           }
         });
+
+        // после обхода игроков — добавляем спец-опции
+        if (receiverSelect && !window.isObserver) {
+          const bankOpt = document.createElement("option");
+          bankOpt.value = "bank";
+          bankOpt.textContent = "Банк";
+          receiverSelect.appendChild(bankOpt);
+
+          const govOpt = document.createElement("option");
+          govOpt.value = "gov";
+          govOpt.textContent = "Государство";
+          receiverSelect.appendChild(govOpt);
+        }
 
         // кандидаты для модалки голосования
         window.voteCandidates = update.players

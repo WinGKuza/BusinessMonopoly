@@ -62,6 +62,11 @@
         <span id="pause-indicator">{% if is_paused %}<em>(пауза)</em>{% endif %}</span>
     </p>
 
+    <!-- 🔹 Общий банковский счёт игры -->
+    <p style="text-align: center; font-size: 16px; margin-top: 5px;">
+        Банковский счёт: <span id="bank-balance">{{ game.bank_balance }}</span> 💼
+    </p>
+
     <script type="module">
         import { initGameTimer } from "{% static 'js/timer.js' %}";
         window.timer = initGameTimer({{ elapsed_seconds|default:0 }}, "{{ is_paused|yesno:'true,false' }}");
@@ -88,13 +93,30 @@
         <form id="transfer-form" style="display:none; margin-top: 10px;">
             {% csrf_token %}
             <select id="receiver" name="receiver" required>
+                {# Обычные игроки: все, кроме наблюдателей и Политика #}
                 {% for gp in players %}
-                    {% if gp.user != request.user and not gp.is_observer %}
-                        <option value="{{ gp.id }}">{{ gp.user.username }}</option>
+                    {% if not gp.is_observer and gp.special_role != 2 and gp.user != request.user %}
+                        <option value="p{{ gp.id }}">{{ gp.user.username }}</option>
                     {% endif %}
                 {% endfor %}
+
+                <!-- Специальные получатели -->
+                <option value="bank">Банк</option>
+                <option value="gov">Государство</option>
             </select>
             <input type="number" id="amount" name="amount" min="1" placeholder="Сумма" required style="width: 100px;">
+
+            <div style="margin-top: 8px; font-size: 14px; {% if player.special_role != 1 %}display:none;{% endif %}">
+                <label style="margin-right: 10px;">
+                    <input type="radio" name="source" value="personal" checked>
+                    Личный счёт
+                </label>
+                <label>
+                    <input type="radio" name="source" value="bank">
+                    Банковский счёт
+                </label>
+            </div>
+
             <button type="submit" style="padding: 4px 12px;">OK</button>
         </form>
 
@@ -102,7 +124,7 @@
         <button data-pause id="reelect-button"
                 data-vote-url="{% url 'vote_for_official' game.id %}"
                 style="flex: 1; width: 100%; padding: 10px 0; font-size: 16px; background-color: #2f71f5; color: white; border: none; border-radius: 6px; cursor: pointer;">
-                🔄 Переизбрать Политика
+                🔄 Избрать Политика
         </button>
         </div>
 
